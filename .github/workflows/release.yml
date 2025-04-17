@@ -1,10 +1,10 @@
 # -----------------------------------------------------------------------------
-#  GitHub Actions · Publish to GitHub Packages **and** npmjs with Yarn 4 (Corepack)
+#  GitHub Actions · Publish to GitHub Packages **and** npmjs with Yarn 4 (Corepack)
 #
 #  Trigger:  release → published  (tag must be vX.Y.Z)
 # -----------------------------------------------------------------------------
 
-name: Publish to GitHub Packages and npmjs
+name: Publish to GitHub Packages and npmjs
 
 on:
   release:
@@ -54,7 +54,7 @@ jobs:
       # -----------------------------------------------------------------------
       # 4. Enable Corepack & activate the Yarn version declared in package.json
       # -----------------------------------------------------------------------
-      - name: Activate Yarn 4 via Corepack
+      - name: Activate Yarn 4 via Corepack
         run: |
           corepack enable
           # Use the exact version pinned in package.json → "packageManager": "yarn@x.y.z"
@@ -119,28 +119,26 @@ jobs:
       # -----------------------------------------------------------------------
       # 8. Publish to GitHub Packages (private scope registry)
       # -----------------------------------------------------------------------
-      - name: Publish package (GitHub Packages)
+      - name: Publish package (GitHub Packages)
         env:
           # Auth token for GH Packages
           YARN_NPM_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Force Yarn’s publish registry — prevents any accidental npmjs push
           YARN_NPM_REGISTRY_SERVER: https://npm.pkg.github.com
         run: |
-          # Hard‑code the registry for the @productioncity scope
+          # Hard-code the registry for the @productioncity scope
           yarn config set npmScopes.productioncity.npmRegistryServer "https://npm.pkg.github.com"
           yarn config set npmScopes.productioncity.npmAlwaysAuth true
-          # Now publish – this goes to GH Packages only
+          # Now publish - this goes to GH Packages only
           yarn npm publish --access public
 
       # -----------------------------------------------------------------------
-      # 9. Publish to npmjs (public registry)
+      # 9. Publish to npmjs (which just sucks)
       # -----------------------------------------------------------------------
-      - name: Publish package (npmjs)
+      - name: Publish to npmjs
         env:
-          # Auth token for npmjs
           YARN_NPM_AUTH_TOKEN: ${{ secrets.NPMJS_PUBLISH_TOKEN }}
-          # Ensure the publish targets the public registry
-          YARN_NPM_REGISTRY_SERVER: https://registry.npmjs.org
         run: |
-          # Override any prior scope registry so the package also lands on npmjs
-          yarn npm publish --access public --publishRegistry https://registry.npmjs.org
+          # Override only the *publish* registry for this scope
+          yarn config set npmScopes.productioncity.npmPublishRegistry "https://registry.npmjs.org"
+          yarn npm publish --access public
