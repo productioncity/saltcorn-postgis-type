@@ -1,5 +1,5 @@
 {
-    "name": "saltcorn-postgis-type",
+    "name": "@productioncity/saltcorn-postgis-type",
     "version": "0.1.0",
     "description": "Postgis type for Saltcorn",
     "main": "index.js",
