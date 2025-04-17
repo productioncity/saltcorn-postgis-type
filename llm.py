@@ -288,7 +288,7 @@ class OpenAIInteraction:
                 frequency_penalty=0,
                 presence_penalty=0,
                 timeout=TIMEOUT_SECONDS,
-                # reasoning_effort=self.reasoning
+                reasoning_effort=self.reasoning
             )
 
             # Log token usage if available
@@ -383,7 +383,7 @@ class OpenAIInteraction:
                 model=self.model,
                 messages=self._format_messages(messages_without_system),
                 timeout=TIMEOUT_SECONDS,
-                # reasoning_effort=self.reasoning
+                reasoning_effort=self.reasoning
             )
             # If we successfully get a response, update the original
             # conversation to remove system role and use the new messages.
