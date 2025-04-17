@@ -5,6 +5,7 @@
 # LLM
 /.llm.json
 /llm.md
+/llm.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
