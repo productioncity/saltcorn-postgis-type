@@ -43,7 +43,7 @@ jobs:
           echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
-      # 3. Setup Node (no Yarn cache here – we’ll cache manually)
+      # 3. Setup Node (registry already pointed at GH Packages)
       # -----------------------------------------------------------------------
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -117,10 +117,17 @@ jobs:
         run: yarn install --immutable
 
       # -----------------------------------------------------------------------
-      # 8. Publish to GitHub Packages
+      # 8. Publish to GitHub Packages ***ONLY***
       # -----------------------------------------------------------------------
-      - name: Publish package
+      - name: Publish package (GitHub Packages)
         env:
+          # Auth token for GH Packages
           YARN_NPM_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Force Yarn’s publish registry — prevents any accidental npmjs.org push
+          YARN_NPM_REGISTRY_SERVER: https://npm.pkg.github.com
         run: |
+          # Hard‑code the registry for the @productioncity scope
+          yarn config set npmScopes.productioncity.npmRegistryServer "https://npm.pkg.github.com"
+          yarn config set npmScopes.productioncity.npmAlwaysAuth true
+          # Now publish – this goes to GH Packages only
           yarn npm publish --access public
