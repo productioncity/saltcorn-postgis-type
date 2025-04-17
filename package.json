@@ -1,6 +1,6 @@
 {
   "name": "@productioncity/saltcorn-postgis-type",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Postgis type for Saltcorn",
   "main": "index.js",
   "dependencies": {
