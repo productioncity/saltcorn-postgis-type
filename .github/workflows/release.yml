@@ -1,91 +1,96 @@
 # -----------------------------------------------------------------------------
-#  GitHub Actions  ·  Automated Yarn publication to GitHub Packages
+#  GitHub Actions · Publish to GitHub Packages with Yarn 4 (Corepack)
 #
-#  • Trigger:        Release “published” event with tag `v<semver>` (e.g. v0.1.0)
-#  • Tool‑chain:     Yarn (stable via Corepack) — mirrors the dev‑container setup
-#  • Steps:
-#       1. Validate tag & extract version
-#       2. Bump package.json if needed, commit & push back
-#       3. Yarn install (immutable) to guarantee a reproducible build
-#       4. Publish to GitHub Packages only (`yarn npm publish`)
-#
-#  Notes:
-#    – Works with Yarn 4 lockfile and PnP or node‑modules linker
-#    – Requires no extra secrets; uses `GITHUB_TOKEN` for both push & publish.
+#  Trigger:  release → published  (tag must be vX.Y.Z)
 # -----------------------------------------------------------------------------
 
-name: Publish to GitHub Packages
+name: Publish to GitHub Packages
 
 on:
   release:
     types: [published]
 
 permissions:
-  contents: write    # version bump commit
-  packages: write    # publish to the GH npm registry
+  contents: write     # commit version bump
+  packages: write     # publish to GH Packages
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: startsWith(github.event.release.tag_name, 'v')   # quick filter
+    if: startsWith(github.event.release.tag_name, 'v')
 
     steps:
       # -----------------------------------------------------------------------
-      # 1. Checkout full history (needed to push the version bump)
+      # 1. Checkout (full history so we can push back)
       # -----------------------------------------------------------------------
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       # -----------------------------------------------------------------------
-      # 2. Validate SEMVER tag and expose VERSION output
+      # 2. Validate & extract SEMVER from the tag
       # -----------------------------------------------------------------------
       - name: Validate tag
         id: semver
         run: |
           TAG="${{ github.event.release.tag_name }}"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error title=Invalid tag::$TAG is not a valid SEMVER tag (vX.Y.Z expected)"
+            echo "::error::$TAG is not a valid semver tag (vX.Y.Z expected)"
             exit 1
           fi
           echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       # -----------------------------------------------------------------------
-      # 3. Setup Node + Yarn (same as dev‑container)
+      # 3. Setup Node (no Yarn cache here – we’ll cache manually)
       # -----------------------------------------------------------------------
-      - name: Set up Node.js & Yarn
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          registry-url: https://npm.pkg.github.com      # default for yarn npm
-          cache: yarn                                   # caches .yarn/cache
+          registry-url: https://npm.pkg.github.com
 
-      - name: Activate Yarn stable via Corepack
+      # -----------------------------------------------------------------------
+      # 4. Enable Corepack & activate the Yarn version declared in package.json
+      # -----------------------------------------------------------------------
+      - name: Activate Yarn 4 via Corepack
         run: |
           corepack enable
-          corepack prepare yarn@stable --activate
+          # Use the exact version pinned in package.json → "packageManager": "yarn@x.y.z"
+          YARN_VERSION=$(node -p "require('./package.json').packageManager.split('@')[1]")
+          echo "Using Yarn $YARN_VERSION (from package.json)"
+          corepack prepare "yarn@$YARN_VERSION" --activate
           yarn --version
 
       # -----------------------------------------------------------------------
-      # 4. Sync package.json version with tag
+      # 5. Cache Yarn “offline mirror” (.yarn/cache)
+      # -----------------------------------------------------------------------
+      - name: Restore Yarn cache
+        uses: actions/cache@v4
+        with:
+          path: .yarn/cache
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      # -----------------------------------------------------------------------
+      # 6. Synchronise package.json version with the release tag
       # -----------------------------------------------------------------------
       - name: Bump package.json (if required)
         run: |
           node - <<'NODE'
           const fs = require('fs');
-          const file = 'package.json';
-          const pkg  = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const pkgPath = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
           const version = process.env.VERSION;
 
           if (pkg.version === version) {
             console.log(`package.json already at ${version}`);
             process.exit(0);
           }
-
           pkg.version = version;
-          fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + '\n');
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
           console.log(`package.json updated → ${version}`);
           NODE
         env:
@@ -94,10 +99,9 @@ jobs:
       - name: Commit & push version bump
         run: |
           if git diff --quiet package.json; then
-            echo "No change to commit."
-            exit 0
+            echo "No change to commit";
+            exit 0;
           fi
-
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json
@@ -107,18 +111,16 @@ jobs:
           VERSION: ${{ steps.semver.outputs.VERSION }}
 
       # -----------------------------------------------------------------------
-      # 5. Install dependencies reproducibly (requires yarn.lock)
+      # 7. Install dependencies (immutable → enforces yarn.lock)
       # -----------------------------------------------------------------------
       - name: Yarn install (immutable)
         run: yarn install --immutable
 
       # -----------------------------------------------------------------------
-      # 6. Publish to GitHub Packages (no npmjs publish)
+      # 8. Publish to GitHub Packages
       # -----------------------------------------------------------------------
       - name: Publish package
         env:
           YARN_NPM_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # --access public ensures visibility within the GH registry
           yarn npm publish --access public
