@@ -1,0 +1,104 @@
+# -----------------------------------------------------------------------------
+#  GitHub Actions · Automated package publication to GitHub Packages
+#
+#  – Triggers on a published release whose tag matches `v<semver>` (e.g. v0.1.0)
+#  – Updates `package.json` version to the tag’s version (if necessary)
+#  – Commits & pushes the change back to the default branch
+#  – Publishes the package to the GitHub npm registry only
+#
+#  Best practice:
+#    · Uses GITHUB_TOKEN for auth (no extra secrets required)
+#    · Validates SEMVER tag before continuing
+#    · Skips NPMJS publication entirely
+# -----------------------------------------------------------------------------
+
+name: Publish to GitHub Packages
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # push the version bump back to the repo
+  packages: write   # publish to the GitHub npm registry
+
+jobs:
+  publish:
+    name: Publish package
+    runs-on: ubuntu-latest
+
+    # Only proceed for tags that start with "v"
+    if: startsWith(github.event.release.tag_name, 'v')
+
+    steps:
+      # 1. Check out the code (full history so we can push back)
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Validate the tag is strict SEMVER (vX.Y.Z)
+      - name: Validate release tag
+        id: validate
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid tag::$TAG is not a valid SEMVER tag (vX.Y.Z expected)"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # 3. Set up Node with GitHub Packages registry pre‑configured
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com
+          cache: npm
+
+      # 4. Bump package.json version if it differs from the tag
+      - name: Update package.json version
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const version = process.env.VERSION;
+
+          if (pkg.version === version) {
+            console.log(`package.json already at ${version}; no change needed.`);
+            process.exit(0);
+          }
+
+          pkg.version = version;
+          fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+          console.log(`package.json updated to version ${version}`);
+          NODE
+        env:
+          VERSION: ${{ steps.validate.outputs.VERSION }}
+
+      # 5. Commit & push the version bump (skip if nothing changed)
+      - name: Commit version bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stage and commit if file changed
+          if ! git diff --quiet package.json; then
+            git add package.json
+            git commit -m "chore(release): bump package version to ${VERSION} [skip ci]"
+            git push origin HEAD:${{ github.event.repository.default_branch }}
+          else
+            echo "No version change to commit."
+          fi
+        env:
+          VERSION: ${{ steps.validate.outputs.VERSION }}
+
+      # 6. Publish the package to GitHub Packages
+      - name: Publish to GitHub Packages
+        run: |
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
