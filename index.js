@@ -116,7 +116,11 @@ const getTypeAttributes = (def) => {
       required: false,
       default: DEFAULT_SRID,
       description:
-        'Spatial Reference ID (EPSG). 4326 = WGS‑84 by default.',
+        // Added richer context so designers understand what SRID means.
+        'Spatial Reference System Identifier (numeric EPSG code).\n' +
+        '4326 = WGS‑84 latitude/longitude (GPS)\n' +
+        '3857 = Web‑Mercator (web maps)\n' +
+        'Must be a positive integer. Defaults to 4326 when left blank.',
     });
   }
 
@@ -129,7 +133,13 @@ const getTypeAttributes = (def) => {
       attributes: { options: DIM_MODIFIERS },
       default: '',
       description:
-        'Allowed modifiers: Z (3‑D), M (measured), ZM (3‑D+measured) or blank.',
+        // Clarified each option so the meaning of Z/M/ZM is obvious.
+        'Dimensionality flags:\n' +
+        '• (blank) → 2‑D   (X Y)\n' +
+        '• Z       → 3‑D   (X Y Z)\n' +
+        '• M       → Measured (X Y M)\n' +
+        '• ZM      → 3‑D + Measured (X Y Z M)\n' +
+        '“Z” carries height/elevation, “M” carries an arbitrary measure (e.g. time or distance).',
     });
   }
 
