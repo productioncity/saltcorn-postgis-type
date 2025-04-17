@@ -1,0 +1,16 @@
+{
+    "name": "saltcorn-postgis-type",
+    "version": "0.1.0",
+    "description": "Postgis type for Saltcorn",
+    "main": "index.js",
+    "dependencies": {
+        "@saltcorn/markup": "^0.2.1",
+        "@saltcorn/data": "^0.2.1"
+    },
+    "author": "Troy Kelly",
+    "license": "CC0-1.0",
+    "repository": "github:productioncity/saltcorn-postgis-type",
+    "publishConfig": {
+        "access": "public"
+    }
+}
