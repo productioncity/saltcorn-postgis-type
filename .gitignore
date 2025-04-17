@@ -261,7 +261,6 @@ internal/
 !tests/cases/projects/NodeModulesSearch/**/*
 !tests/baselines/reference/project/nodeModules*/**/*
 .idea
-yarn.lock
 yarn-error.log
 .parallelperf.*
 tests/baselines/reference/dt
@@ -277,7 +276,8 @@ package-lock.json
 .LSOverride
 
 # Icon must end with two \r
-Icon
+Icon
+
 
 # Thumbnails
 ._*
