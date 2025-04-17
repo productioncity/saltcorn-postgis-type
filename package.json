@@ -12,5 +12,6 @@
     "repository": "github:productioncity/saltcorn-postgis-type",
     "publishConfig": {
         "access": "public"
-    }
+    },
+    "packageManager": "yarn@4.1.0"
 }
