@@ -262,6 +262,8 @@ internal/
 !tests/baselines/reference/project/nodeModules*/**/*
 .idea
 yarn-error.log
+.yarn
+.yarnrc.yml
 .parallelperf.*
 tests/baselines/reference/dt
 .failed-tests
