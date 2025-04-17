@@ -6,12 +6,12 @@
  *   Provides a comprehensive suite of Saltcorn data‑types that map one‑to‑one
  *   with all practical PostGIS geometry and geography types, including robust
  *   attribute handling (SRID, dimensionality, subtype restrictions) and basic
- *   GeoJSON → WKT conversion.
+ *   GeoJSON → WKT conversion.
  *
  * Author:        Troy Kelly <troy@team.production.city>
  * Maintainer:    Production City <engineering@production.city>
- * First‑created: 17 Apr 2024
- * This revision: 17 Apr 2025 – QA hardening & completeness review
+ * First‑created: 17 Apr 2024
+ * This revision: 17 Apr 2025 – QA hardening & completeness review
  * Licence:       CC0‑1.0 (see LICENCE)
  */
 
@@ -23,7 +23,7 @@ const { text } = require('@saltcorn/markup');
 
 /**
  * @typedef {object} PostGISTypeAttributes
- * @property {number} [srid]  Spatial reference identifier (default = 4326)
+ * @property {number} [srid]  Spatial reference identifier (default = 4326)
  * @property {''|'Z'|'M'|'ZM'} [dim] Dimensionality modifier
  * @property {string} [subtype] Geometry subtype for generic geometry/geography
  */
@@ -116,7 +116,7 @@ const getTypeAttributes = (def) => {
       required: false,
       default: DEFAULT_SRID,
       description:
-        'Spatial Reference ID (EPSG). 4326 = WGS‑84 by default.',
+        'Spatial Reference ID (EPSG). 4326 = WGS‑84 by default.',
     });
   }
 
@@ -129,7 +129,7 @@ const getTypeAttributes = (def) => {
       attributes: { options: DIM_MODIFIERS },
       default: '',
       description:
-        'Allowed modifiers: Z (3‑D), M (measured), ZM (3‑D+measured) or blank.',
+        'Allowed modifiers: Z (3‑D), M (measured), ZM (3‑D+measured) or blank.',
     });
   }
 
