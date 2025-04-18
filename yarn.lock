@@ -90,6 +90,8 @@ __metadata:
   dependencies:
     "@saltcorn/data": "npm:^0.2.1"
     "@saltcorn/markup": "npm:^0.2.1"
+    "@saltcorn/types": "npm:^1.1.4-beta.9"
+    wellknown: "npm:^0.5.0"
   languageName: unknown
   linkType: soft
 
@@ -129,6 +131,13 @@ __metadata:
     escape-html: "npm:^1.0.3"
     xss: "npm:^1.0.6"
   checksum: 10c0/18a06bc3d22213205650ae21b4d6358de1e1d710c3aba787dd11d04abd10bc7cda97354e0c8b7a4d3c0e92a61ac0a22b0324df262eb51d3291591b0819ae4ec6
+  languageName: node
+  linkType: hard
+
+"@saltcorn/types@npm:^1.1.4-beta.9":
+  version: 1.1.4-beta.9
+  resolution: "@saltcorn/types@npm:1.1.4-beta.9"
+  checksum: 10c0/fdd296bc4d0406d0c63587a08c82529787bea09e101461f651b13535c9c30b6604941b79fff2b28a114c440fa45425dbeb42ca234aa945a1383aa30b3313f6d0
   languageName: node
   linkType: hard
 
@@ -470,6 +479,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"concat-stream@npm:~1.5.0":
+  version: 1.5.2
+  resolution: "concat-stream@npm:1.5.2"
+  dependencies:
+    inherits: "npm:~2.0.1"
+    readable-stream: "npm:~2.0.0"
+    typedarray: "npm:~0.0.5"
+  checksum: 10c0/cddbf5d79c96e3062deaf393d497deebc9798636af921c57d5b0de194c32a0188bc769888ae94ab0405802db6d25db58acddc0a761f8fad18697a904cc08be3b
+  languageName: node
+  linkType: hard
+
 "connect-pg-simple@npm:^6.1.0":
   version: 6.2.1
   resolution: "connect-pg-simple@npm:6.2.1"
@@ -493,6 +513,13 @@ __metadata:
   dependencies:
     stack-trace: "npm:^0.0.10"
   checksum: 10c0/6fff30fc176788b34f875086ad2f40df0fdda0c592214f3571b52d0662b3e036decb7517082214ba3eeb53e55e47cab581c4a3f6bbf8ae365ccbb1150a971513
+  languageName: node
+  linkType: hard
+
+"core-util-is@npm:~1.0.0":
+  version: 1.0.3
+  resolution: "core-util-is@npm:1.0.3"
+  checksum: 10c0/90a0e40abbddfd7618f8ccd63a74d88deea94e77d0e8dbbea059fa7ebebb8fbb4e2909667fe26f3a467073de1a542ebe6ae4c73a73745ac5833786759cd906c9
   languageName: node
   linkType: hard
 
@@ -903,7 +930,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"inherits@npm:2, inherits@npm:^2.0.3, inherits@npm:^2.0.4":
+"inherits@npm:2, inherits@npm:^2.0.3, inherits@npm:^2.0.4, inherits@npm:~2.0.1":
   version: 2.0.4
   resolution: "inherits@npm:2.0.4"
   checksum: 10c0/4e531f648b29039fb7426fb94075e6545faa1eb9fe83c29f0b6d9e7263aceb4289d2d4557db0d428188eeb449cc7c5e77b0a0b2c4e248ff2a65933a0dee49ef2
@@ -945,6 +972,13 @@ __metadata:
   version: 0.2.1
   resolution: "is-utf8@npm:0.2.1"
   checksum: 10c0/3ed45e5b4ddfa04ed7e32c63d29c61b980ecd6df74698f45978b8c17a54034943bcbffb6ae243202e799682a66f90fef526f465dd39438745e9fe70794c1ef09
+  languageName: node
+  linkType: hard
+
+"isarray@npm:~1.0.0":
+  version: 1.0.0
+  resolution: "isarray@npm:1.0.0"
+  checksum: 10c0/18b5be6669be53425f0b84098732670ed4e727e3af33bc7f948aac01782110eb9a18b3b329c5323bcdd3acdaae547ee077d3951317e7f133bff7105264b3003d
   languageName: node
   linkType: hard
 
@@ -1073,7 +1107,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"minimist@npm:^1.2.0, minimist@npm:^1.2.3":
+"minimist@npm:^1.2.0, minimist@npm:^1.2.3, minimist@npm:~1.2.0":
   version: 1.2.8
   resolution: "minimist@npm:1.2.8"
   checksum: 10c0/19d3fcdca050087b84c2029841a093691a91259a47def2f18222f41e7645a0b7c44ef4b40e88a1e58a40c84d2ef0ee6047c55594d298146d0eb3f6b737c20ce6
@@ -1573,6 +1607,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"process-nextick-args@npm:~1.0.6":
+  version: 1.0.7
+  resolution: "process-nextick-args@npm:1.0.7"
+  checksum: 10c0/941bb79700261e44c535e234f751a924df564d4d8ff250dd06c3e213f639060c190364879722c096e777cae32116c6a88d97bee50d0b5704ab2899813818f4c8
+  languageName: node
+  linkType: hard
+
 "promise-inflight@npm:^1.0.1":
   version: 1.0.1
   resolution: "promise-inflight@npm:1.0.1"
@@ -1622,6 +1663,20 @@ __metadata:
     string_decoder: "npm:^1.1.1"
     util-deprecate: "npm:^1.0.1"
   checksum: 10c0/e37be5c79c376fdd088a45fa31ea2e423e5d48854be7a22a58869b4e84d25047b193f6acb54f1012331e1bcd667ffb569c01b99d36b0bd59658fb33f513511b7
+  languageName: node
+  linkType: hard
+
+"readable-stream@npm:~2.0.0":
+  version: 2.0.6
+  resolution: "readable-stream@npm:2.0.6"
+  dependencies:
+    core-util-is: "npm:~1.0.0"
+    inherits: "npm:~2.0.1"
+    isarray: "npm:~1.0.0"
+    process-nextick-args: "npm:~1.0.6"
+    string_decoder: "npm:~0.10.x"
+    util-deprecate: "npm:~1.0.1"
+  checksum: 10c0/8c719705d2e2379dee91fa44dfdc47a7b5754558454dfe787121120d9c048efaa6f4666205492b4e73fe70eb49c61a36eac57e5062cb9a04b098675f065139cb
   languageName: node
   linkType: hard
 
@@ -1851,6 +1906,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"string_decoder@npm:~0.10.x":
+  version: 0.10.31
+  resolution: "string_decoder@npm:0.10.31"
+  checksum: 10c0/1c628d78f974aa7539c496029f48e7019acc32487fc695464f9d6bdfec98edd7d933a06b3216bc2016918f6e75074c611d84430a53cb0e43071597d6c1ac5e25
+  languageName: node
+  linkType: hard
+
 "strip-ansi-cjs@npm:strip-ansi@^6.0.1, strip-ansi@npm:^6.0.0, strip-ansi@npm:^6.0.1":
   version: 6.0.1
   resolution: "strip-ansi@npm:6.0.1"
@@ -1980,6 +2042,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"typedarray@npm:~0.0.5":
+  version: 0.0.7
+  resolution: "typedarray@npm:0.0.7"
+  checksum: 10c0/4cf120c698e86cf7960e4805b6695f783b1ef3a4ab8e2aadc4244802db1469b66f88bff340527c74896225f025fe14f80b4893573f0397738fd4fd3a52032c47
+  languageName: node
+  linkType: hard
+
 "undici-types@npm:~6.21.0":
   version: 6.21.0
   resolution: "undici-types@npm:6.21.0"
@@ -2023,7 +2092,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"util-deprecate@npm:^1.0.1":
+"util-deprecate@npm:^1.0.1, util-deprecate@npm:~1.0.1":
   version: 1.0.2
   resolution: "util-deprecate@npm:1.0.2"
   checksum: 10c0/41a5bdd214df2f6c3ecf8622745e4a366c4adced864bc3c833739791aeeeb1838119af7daed4ba36428114b5c67dcda034a79c882e97e43c03e66a4dd7389942
@@ -2043,6 +2112,18 @@ __metadata:
   version: 3.0.1
   resolution: "webidl-conversions@npm:3.0.1"
   checksum: 10c0/5612d5f3e54760a797052eb4927f0ddc01383550f542ccd33d5238cfd65aeed392a45ad38364970d0a0f4fea32e1f4d231b3d8dac4a3bdd385e5cf802ae097db
+  languageName: node
+  linkType: hard
+
+"wellknown@npm:^0.5.0":
+  version: 0.5.0
+  resolution: "wellknown@npm:0.5.0"
+  dependencies:
+    concat-stream: "npm:~1.5.0"
+    minimist: "npm:~1.2.0"
+  bin:
+    wellknown: cli.js
+  checksum: 10c0/f62d0454253569dc8f0d8ad74b4bb20d07fe990de4c6c36071eb2b80bd9eb17c2bdabfc4778956e472e4b3b21b12e08682ddca9bf09e4465281ca1768df0d361
   languageName: node
   linkType: hard
 

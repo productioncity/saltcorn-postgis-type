@@ -11,539 +11,522 @@
  * Author:        Troy Kelly <troy@team.production.city>
  * Maintainer:    Production City <engineering@production.city>
  * First‑created: 17 Apr 2024
- * This revision: 17 Apr 2025 – QA hardening & completeness review
+ * This revision: 18 Apr 2025 - Fixing the issue: https://github.com/productioncity/saltcorn-postgis-type/issues/18
  * Licence:       CC0‑1.0 (see LICENCE)
  */
 
-/* eslint-disable camelcase */
-
 'use strict';
 
-const { text } = require('@saltcorn/markup');
+/* eslint-disable camelcase, max-lines, max-len */
 
-/**
- * @typedef {object} PostGISTypeAttributes
- * @property {number} [srid]  Spatial reference identifier (default = 4326)
- * @property {''|'Z'|'M'|'ZM'} [dim] Dimensionality modifier
- * @property {string} [subtype] Geometry subtype for generic geometry/geography
- */
+/* ─────────────────────── External dependencies ─────────────────────────── */
+const { div, script, domReady, text: esc } = require('@saltcorn/markup/tags');
+const Table = require('@saltcorn/data/models/table');
+const Field = require('@saltcorn/data/models/field');
+const wellknown = require('wellknown'); // tiny WKT ⇆ GeoJSON converter
 
+/* ────────────────────────────── Constants ──────────────────────────────── */
+
+/** Default SRID (EPSG:4326 – WGS‑84 lat/lng). */
 const DEFAULT_SRID = 4326;
 
-/** All base geometry names understood by PostGIS (upper‑case) */
-const BASE_GEOMETRY_TYPES = [
-  'GEOMETRY',
-  'POINT',
-  'LINESTRING',
-  'POLYGON',
-  'MULTIPOINT',
-  'MULTILINESTRING',
-  'MULTIPOLYGON',
-  'GEOMETRYCOLLECTION',
-  'CIRCULARSTRING',
-  'COMPOUNDCURVE',
-  'CURVEPOLYGON',
-  'MULTICURVE',
-  'MULTISURFACE',
-  'POLYHEDRALSURFACE',
-  'TIN',
-  'TRIANGLE',
-];
+/** Allowed PostGIS dimensionality flags. */
+const DIM_MODS = Object.freeze(['', 'Z', 'M', 'ZM']);
 
-/** Allowed dimensionality modifiers */
-const DIM_MODIFIERS = ['', 'Z', 'M', 'ZM'];
+/** Canonical geometry tokens – used only for attribute validation. */
+const BASE_GEOM_TYPES = Object.freeze([
+  'GEOMETRY', 'POINT', 'LINESTRING', 'POLYGON', 'MULTIPOINT',
+  'MULTILINESTRING', 'MULTIPOLYGON', 'GEOMETRYCOLLECTION',
+  'CIRCULARSTRING', 'COMPOUNDCURVE', 'CURVEPOLYGON', 'MULTICURVE',
+  'MULTISURFACE', 'POLYHEDRALSURFACE', 'TIN', 'TRIANGLE',
+]);
 
 /**
- * One descriptor for every spatial type we expose.
- * Each entry becomes a full Saltcorn type via `makeSpatialType()`.
- *
- * For generic geometry/geography the user can further constrain subtype,
- * dimensions and SRID via field attributes.
- *
- * @type {Array<{
- *   name: string,
- *   base: 'GEOMETRY'|'GEOGRAPHY',
- *   subtype: string,
- *   allowSubtype: boolean,
- *   allowDim: boolean,
- *   allowSRID: boolean
- * }>}
+ * Leaflet CDN assets – pulled in dynamically by field‑views so pages that
+ * never display a map incur zero overhead.
  */
-const ALL_SPATIAL_TYPE_DEFS = [
-  // Generic
-  { name: 'geometry', base: 'GEOMETRY', subtype: '', allowSubtype: true, allowDim: true, allowSRID: true },
-  { name: 'geography', base: 'GEOGRAPHY', subtype: '', allowSubtype: true, allowDim: true, allowSRID: true },
+const LEAFLET = Object.freeze({
+  css: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+  js: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  get header() {
+    return (
+      `<link rel="stylesheet" href="${this.css}"/>\n` +
+      `<script defer src="${this.js}"></script>`
+    );
+  },
+});
 
-  // Frequently‑used
-  { name: 'point', base: 'GEOMETRY', subtype: 'POINT', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'linestring', base: 'GEOMETRY', subtype: 'LINESTRING', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'polygon', base: 'GEOMETRY', subtype: 'POLYGON', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'multipoint', base: 'GEOMETRY', subtype: 'MULTIPOINT', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'multilinestring', base: 'GEOMETRY', subtype: 'MULTILINESTRING', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'multipolygon', base: 'GEOMETRY', subtype: 'MULTIPOLYGON', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'geometrycollection', base: 'GEOMETRY', subtype: 'GEOMETRYCOLLECTION', allowSubtype: false, allowDim: true, allowSRID: true },
-
-  // Specialist
-  { name: 'circularstring', base: 'GEOMETRY', subtype: 'CIRCULARSTRING', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'compoundcurve', base: 'GEOMETRY', subtype: 'COMPOUNDCURVE', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'curvepolygon', base: 'GEOMETRY', subtype: 'CURVEPOLYGON', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'multicurve', base: 'GEOMETRY', subtype: 'MULTICURVE', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'multisurface', base: 'GEOMETRY', subtype: 'MULTISURFACE', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'polyhedralsurface', base: 'GEOMETRY', subtype: 'POLYHEDRALSURFACE', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'tin', base: 'GEOMETRY', subtype: 'TIN', allowSubtype: false, allowDim: true, allowSRID: true },
-  { name: 'triangle', base: 'GEOMETRY', subtype: 'TRIANGLE', allowSubtype: false, allowDim: true, allowSRID: true },
-];
-
-/* -------------------------------------------------------------------------- */
-/*                             Attribute definitions                          */
-/* -------------------------------------------------------------------------- */
+/* ───────────────────────────── Typedefs (JSDoc) ────────────────────────── */
 
 /**
- * Build the Saltcorn attribute spec array for a given definition.
+ * Attribute object common to all PostGIS types.
  *
- * @param {ReturnType<typeof ALL_SPATIAL_TYPE_DEFS[number]>} def
- * @returns {import('@saltcorn/types/base_plugin').TypeAttribute[]}
+ * @typedef {object} PostGISTypeAttrs
+ * @property {number=}           srid   EPSG code
+ * @property {''|'Z'|'M'|'ZM'=} [dim]   Dimensionality flag
+ * @property {string=}          subtype Geometry subtype (generic types)
  */
-const getTypeAttributes = (def) => {
-  /** @type {import('@saltcorn/types/base_plugin').TypeAttribute[]} */
-  const attrs = [];
 
-  if (def.allowSRID) {
-    attrs.push({
-      name: 'srid',
-      label: 'SRID',
-      type: 'Integer',
-      required: false,
-      default: DEFAULT_SRID,
-      description:
-        // Added richer context so designers understand what SRID means.
-        'Spatial Reference System Identifier (numeric EPSG code).\n' +
-        '4326 = WGS‑84 latitude/longitude (GPS)\n' +
-        '3857 = Web‑Mercator (web maps)\n' +
-        'Must be a positive integer. Defaults to 4326 when left blank.',
-    });
+/**
+ * Callable + string‑duck‑typed object returned by `sqlNameFactory`.
+ *
+ * @typedef {(attrs?: PostGISTypeAttrs) => string} SqlNameFn
+ */
+
+/* ────────────────────────── Helper utilities ───────────────────────────── */
+
+/**
+ * Build a `sql_name` generator that also quacks like a string.
+ * Older Saltcorn discovery does `.toLowerCase()`; attaching standard
+ * string methods prevents TypeErrors while preserving callable behaviour.
+ *
+ * @param {'GEOMETRY'|'GEOGRAPHY'} base
+ * @param {string} subtype
+ * @returns {SqlNameFn}
+ */
+function sqlNameFactory(base, subtype) {
+  /** @type {SqlNameFn} */
+  function sqlName(attrs = {}) {
+    const srid = attrs.srid ?? DEFAULT_SRID;
+    const dim = attrs.dim ? String(attrs.dim).toUpperCase() : '';
+    const sub = ((attrs.subtype ?? subtype) + dim).toUpperCase();
+
+    const baseLower = base.toLowerCase();
+    if (sub) return `${baseLower}(${sub},${srid})`;
+    if (srid !== undefined && srid !== null) {
+      return `${baseLower}(Geometry,${srid})`;
+    }
+    return baseLower;
   }
 
-  if (def.allowDim) {
-    attrs.push({
-      name: 'dim',
-      label: 'Dimension',
-      type: 'String',
-      required: false,
-      attributes: { options: DIM_MODIFIERS },
-      default: '',
-      description:
-        // Clarified each option so the meaning of Z/M/ZM is obvious.
-        'Dimensionality flags:\n' +
-        '• (blank) → 2‑D   (X Y)\n' +
-        '• Z       → 3‑D   (X Y Z)\n' +
-        '• M       → Measured (X Y M)\n' +
-        '• ZM      → 3‑D + Measured (X Y Z M)\n' +
-        '“Z” carries height/elevation, “M” carries an arbitrary measure (e.g. time or distance).',
-    });
-  }
-
-  if (def.allowSubtype) {
-    attrs.push({
-      name: 'subtype',
-      label: 'Subtype',
-      type: 'String',
-      required: false,
-      attributes: { options: BASE_GEOMETRY_TYPES },
-      default: '',
-      description:
-        'Restrict input to a concrete geometry subtype (optional).',
-    });
-  }
-  return attrs;
-};
-
-/* -------------------------------------------------------------------------- */
-/*                                Field views                                */
-/* -------------------------------------------------------------------------- */
-
-/** A read‑only code block */
-function makeShowView() {
-  return {
-    isEdit: false,
-    /**
-     * @param {string|undefined|null} value
-     * @returns {string}
-     */
-    run: (value) => {
-      if (value === undefined || value === null || value === '') return '';
-      return `<code>${text(value)}</code>`;
-    },
-  };
+  const canonical = base.toLowerCase();
+  Object.defineProperties(sqlName, {
+    toLowerCase: { value: () => canonical },
+    toUpperCase: { value: () => canonical.toUpperCase() },
+    toString: { value: () => canonical },
+    valueOf: { value: () => canonical },
+    [Symbol.toPrimitive]: { value: () => canonical },
+  });
+  return sqlName;
 }
 
 /**
- * Build a simple text input fieldview.
+ * Extract `[lng, lat]` from a POINT WKT (ignores Z/M).
  *
- * @param {string} nameSuffix
- * @param {string} placeholder
- * @returns {{isEdit: true, run: Function}}
+ * @param {unknown} wkt
+ * @returns {[number, number]|undefined}
  */
-function makeEditView(nameSuffix, placeholder) {
-  return {
-    isEdit: true,
-    /**
-     * @param {string} nm
-     * @param {string|undefined|null} v
-     * @param {Record<string, unknown>} _attrs
-     * @param {string} cls
-     * @returns {string}
-     */
-    run: (nm, v, _attrs, cls) =>
-      `<input type="text" inputmode="text" class="form-control ${cls || ''}" name="${nm}" id="input${nameSuffix}${nm}"
-        ${v ? `value="${text(v)}"` : ''} placeholder="${text(placeholder)}">`,
-  };
+function wktToLonLat(wkt) {
+  if (typeof wkt !== 'string') return undefined;
+  const m = wkt
+    .replace(/^SRID=\d+;/i, '')
+    .match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*/i);
+  return m ? [Number(m[1]), Number(m[2])] : undefined;
 }
 
-/* -------------------------------------------------------------------------- */
-/*                              Helper functions                             */
-/* -------------------------------------------------------------------------- */
+/**
+ * Convert any WKT to GeoJSON (best‑effort) via `wellknown`.
+ *
+ * @param {string} wkt
+ * @returns {Record<string, unknown>|undefined}
+ */
+function wktToGeoJSON(wkt) {
+  if (typeof wkt !== 'string') return undefined;
+  try {
+    return wellknown.parse(wkt);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
- * Validate that an attribute object is self‑consistent.
+ * Attribute validator – called by Saltcorn when the admin saves the field
+ * definition.  Keeps backward compatibility with the original plug‑in.
  *
- * @param {Partial<PostGISTypeAttributes>=} attrs
- * @returns {true|string} true or error message
+ * @param {PostGISTypeAttrs=} attrs
+ * @returns {true|string}
  */
-function validateAttributes(attrs) {
+function validateAttrs(attrs) {
   if (!attrs) return true;
-
-  if (
-    Object.prototype.hasOwnProperty.call(attrs, 'srid') &&
-    (attrs.srid === null ||
-      attrs.srid === undefined ||
-      !Number.isInteger(attrs.srid) ||
-      Number(attrs.srid) < 1)
-  ) {
+  if ('srid' in attrs && (!Number.isInteger(attrs.srid) || attrs.srid < 1)) {
     return 'SRID must be a positive integer';
   }
-
-  if (
-    attrs.dim &&
-    !DIM_MODIFIERS.includes(String(attrs.dim).toUpperCase())
-  ) {
-    return 'Invalid dimensionality modifier';
+  if ('dim' in attrs && !DIM_MODS.includes(String(attrs.dim).toUpperCase())) {
+    return 'Invalid dim (use "", "Z", "M" or "ZM")';
   }
-
   if (
-    attrs.subtype &&
-    !BASE_GEOMETRY_TYPES.includes(String(attrs.subtype).toUpperCase())
+    'subtype' in attrs &&
+    !BASE_GEOM_TYPES.includes(String(attrs.subtype).toUpperCase())
   ) {
     return 'Invalid geometry subtype';
   }
-
   return true;
 }
 
 /**
- * Construct a fully‑specified PostGIS type name.
+ * Patch `Table.getRows()` so each Point column yields virtual
+ * `<col>_lat` & `<col>_lng` floats – perfect for the *leaflet‑map* plug‑in.
  *
- * Examples:
- *   geometry(PointZM,4326)
- *   geography(LineString,4326)
- *   geometry(Geometry,3857)
+ * The patch is idempotent; running twice is a no‑op.
  *
- * @param {Partial<PostGISTypeAttributes>=} attrs
- * @param {'GEOMETRY'|'GEOGRAPHY'} baseType
- * @param {string} defaultSubtype
- * @returns {string}
+ * @param {typeof import('@saltcorn/types/model-abstracts/abstract_table').Table} TableClass
  */
-function buildSQLType(attrs, baseType, defaultSubtype) {
-  const srid = attrs?.srid ?? DEFAULT_SRID;
-  const dim = attrs?.dim ? String(attrs.dim).toUpperCase() : '';
-  const subtype =
-    (attrs?.subtype
-      ? String(attrs.subtype).toUpperCase()
-      : defaultSubtype || '') + dim;
+function patchGetRows(TableClass) {
+  if (TableClass.prototype.getRows.__postgisPatched) return;
 
-  const sqlBase = baseType.toLowerCase();
+  const original = TableClass.prototype.getRows;
+  TableClass.prototype.getRows = async function patched(...args) {
+    /** @type {Array<Record<string, unknown>>} */
+    const rows = await original.apply(this, args);
+    const pointCols = (await this.getFields()).filter(
+      (f) => f.type?.name === 'point',
+    );
+    if (pointCols.length === 0) return rows;
 
-  // If a concrete subtype is known
-  if (subtype) {
-    return `${sqlBase}(${subtype},${srid})`;
-  }
+    for (const row of rows) {
+      for (const pc of pointCols) {
+        const ll = wktToLonLat(row[pc.name]);
+        if (ll) {
+          row[`${pc.name}_lat`] = ll[1];  // latitude
+          row[`${pc.name}_lng`] = ll[0];  // longitude
+        }
+      }
+    }
+    return rows;
+  };
+  TableClass.prototype.getRows.__postgisPatched = true;
+}
 
-  // Generic geometry/geography with SRID constraint
-  if (srid !== undefined && srid !== null) {
-    // PostGIS expects the literal “Geometry” token for generic constraints
-    return `${sqlBase}(Geometry,${srid})`;
-  }
+/* ─────────────────────────── Leaflet field‑views ───────────────────────── */
 
-  // Totally generic
-  return sqlBase;
+/**
+ * Read‑only map preview – works for **every** geometry that `wellknown`
+ * can parse.  Injects Leaflet on‑demand.
+ *
+ * @returns {import('@saltcorn/types/base_plugin').FieldView}
+ */
+function leafletShow() {
+  return {
+    isEdit: false,
+    run(value) {
+      if (!value) return '';
+      const id = `ls${Math.random().toString(36).slice(2)}`;
+      const geojson = wktToGeoJSON(value);
+      const pointLL = wktToLonLat(value);
+
+      if (!geojson && !pointLL) return `<code>${esc(String(value))}</code>`;
+
+      /* Client‑side init script */
+      const js = `
+${LEAFLET.header}
+(function(){
+  const map=L.map("${id}",{zoomControl:false,attributionControl:false});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
+    .addTo(map);
+  ${geojson
+          ? `const layer=L.geoJSON(${JSON.stringify(geojson)}).addTo(map);
+         map.fitBounds(layer.getBounds());`
+          : `const pt=[${pointLL[1]},${pointLL[0]}];
+         L.marker(pt).addTo(map);map.setView(pt,12);`
+        }
+})();`;
+      return div({ id, style: 'height:180px' }, '…') + script(domReady(js));
+    },
+  };
 }
 
 /**
- * Lightweight, heuristic WKT checker.
+ * Draggable marker editor for **Point** fields.
  *
- * @param {string} wkt
- * @param {string=} constraint Base subtype, e.g. "POINT" or "POINTZM"
- * @param {''|'Z'|'M'|'ZM'=} dim
- * @returns {boolean}
+ * @param {string} fieldName  Used to avoid duplicate IDs.
+ * @returns {import('@saltcorn/types/base_plugin').FieldView}
  */
-function validateWKT(wkt, constraint, dim) {
-  if (typeof wkt !== 'string') return false;
-
-  let str = wkt.trim().toUpperCase();
-  if (!str) return false;
-
-  if (!/^(SRID=\d+;)?[A-Z]+/.test(str)) return false;
-
-  // Strip optional SRID prefix
-  if (str.startsWith('SRID=')) str = str.substring(str.indexOf(';') + 1);
-
-  const expected =
-    constraint &&
-    (constraint.endsWith('ZM') || constraint.endsWith('Z') || constraint.endsWith('M')
-      ? constraint
-      : constraint + (dim || '')).toUpperCase();
-
-  if (expected && !str.startsWith(expected)) return false;
-
-  // Very lax structural check – relies on PostGIS for the heavy lifting
-  if (!(str.includes('(') && str.endsWith(')')) && !str.endsWith('EMPTY'))
-    return false;
-
-  return true;
+function leafletEdit(fieldName) {
+  return {
+    isEdit: true,
+    run(nm, value) {
+      const id = `${fieldName}_${Math.random().toString(36).slice(2)}`;
+      const ll = wktToLonLat(value) || [0, 0];
+      return (
+        div({ id, style: 'height:250px' }, '…') +
+        `<input type="hidden" id="inp${id}" name="${esc(nm)}" value="${esc(value || '')}">` +
+        script(
+          domReady(`
+${LEAFLET.header}
+(function(){
+  const map=L.map("${id}");
+  map.setView([${ll[1]},${ll[0]}], ${value ? 12 : 2});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
+    .addTo(map);
+  const mk=L.marker([${ll[1]},${ll[0]}],{draggable:true}).addTo(map);
+  function upd(pt){document.getElementById("inp${id}").value="POINT("+pt.lng+" "+pt.lat+")";}
+  mk.on('dragend',e=>upd(e.target.getLatLng()));
+  map.on('click',e=>{mk.setLatLng(e.latlng);upd(e.latlng);});
+})();`)
+        )
+      );
+    },
+  };
 }
 
-/* -------------------------- GeoJSON → WKT helpers ------------------------- */
+/* ──────────────────────────  Type factory  ─────────────────────────────── */
 
 /**
- * Convert a number array or nested arrays to a WKT coordinate string.
+ * Construct a Saltcorn `Type` object.
  *
- * Recurses through arbitrary nesting depth.
- *
- * @param {unknown} coords
- * @returns {string}
- */
-function coordsToString(coords) {
-  if (!Array.isArray(coords)) return '';
-
-  // Plain position (Point)
-  if (coords.length && typeof coords[0] === 'number') {
-    return coords.join(' ');
-  }
-
-  // One nesting level down
-  return coords
-    .map((c) =>
-      Array.isArray(c[0]) ? `(${coordsToString(c)})` : coordsToString(c),
-    )
-    .join(', ');
-}
-
-/**
- * Convert a GeoJSON geometry object (not Feature) to WKT.
- *
- * Only simple, RFC‑7946 compliant objects are supported.
- *
- * @param {Record<string, any>} geojson
- * @returns {string|undefined}
- */
-function geojsonToWKT(geojson) {
-  if (!geojson || typeof geojson.type !== 'string') return undefined;
-
-  const type = geojson.type.toUpperCase();
-
-  switch (type) {
-    case 'POINT':
-      return Array.isArray(geojson.coordinates)
-        ? `POINT(${coordsToString(geojson.coordinates)})`
-        : undefined;
-
-    case 'MULTIPOINT':
-      return Array.isArray(geojson.coordinates)
-        ? `MULTIPOINT(${geojson.coordinates
-          .map((pt) => coordsToString(pt))
-          .join(', ')})`
-        : undefined;
-
-    case 'LINESTRING':
-      return Array.isArray(geojson.coordinates)
-        ? `LINESTRING(${geojson.coordinates
-          .map((pt) => coordsToString(pt))
-          .join(', ')})`
-        : undefined;
-
-    case 'MULTILINESTRING':
-      return Array.isArray(geojson.coordinates)
-        ? `MULTILINESTRING(${geojson.coordinates
-          .map(
-            (ls) => `(${ls.map((pt) => coordsToString(pt)).join(', ')})`,
-          )
-          .join(', ')})`
-        : undefined;
-
-    case 'POLYGON':
-      return Array.isArray(geojson.coordinates)
-        ? `POLYGON(${geojson.coordinates
-          .map(
-            (ring) => `(${ring.map((pt) => coordsToString(pt)).join(', ')})`,
-          )
-          .join(', ')})`
-        : undefined;
-
-    case 'MULTIPOLYGON':
-      return Array.isArray(geojson.coordinates)
-        ? `MULTIPOLYGON(${geojson.coordinates
-          .map(
-            (poly) =>
-              `(${poly
-                .map(
-                  (ring) =>
-                    `(${ring
-                      .map((pt) => coordsToString(pt))
-                      .join(', ')})`,
-                )
-                .join(', ')})`,
-          )
-          .join(', ')})`
-        : undefined;
-
-    case 'GEOMETRYCOLLECTION':
-      return Array.isArray(geojson.geometries)
-        ? `GEOMETRYCOLLECTION(${geojson.geometries
-          .map((g) => geojsonToWKT(g))
-          .filter(Boolean)
-          .join(', ')})`
-        : undefined;
-
-    default:
-      return undefined;
-  }
-}
-
-/* -------------------------------------------------------------------------- */
-/*                            Saltcorn type factory                           */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Produce a Saltcorn type object from an internal descriptor.
- *
- * @param {typeof ALL_SPATIAL_TYPE_DEFS[number]} def
+ * @param {object} def
+ * @param {string} def.name
+ * @param {'GEOMETRY'|'GEOGRAPHY'} def.base
+ * @param {string} def.subtype
+ * @param {boolean} def.allowDim
+ * @param {boolean} def.allowSubtype
  * @returns {import('@saltcorn/types/base_plugin').Type}
  */
-function makeSpatialType(def) {
-  const { name, base, subtype } = def;
-  const label =
-    (subtype || base).charAt(0).toUpperCase() +
-    (subtype || base).slice(1).toLowerCase();
+function makeType(def) {
+  const { name, base, subtype, allowDim, allowSubtype } = def;
+  const label = (subtype || base)
+    .replace(/^\w/, (c) => c.toUpperCase());
+
+  /** @type {import('@saltcorn/types/base_plugin').TypeAttribute[]} */
+  const attributes = [
+    { name: 'srid', label: 'SRID', type: 'Integer', default: DEFAULT_SRID },
+  ];
+  if (allowDim) {
+    attributes.push({
+      name: 'dim',
+      label: 'Dim',
+      type: 'String',
+      attributes: { options: DIM_MODS },
+    });
+  }
+  if (allowSubtype) {
+    attributes.push({
+      name: 'subtype',
+      label: 'Subtype',
+      type: 'String',
+      attributes: { options: BASE_GEOM_TYPES },
+    });
+  }
+
+  const fieldviews = { show: leafletShow() };
+  if (name === 'point') fieldviews.edit = leafletEdit(name);
 
   return {
     name,
-
-    /** @param {Partial<PostGISTypeAttributes>=} attrs */
-    sql_name: (attrs) => buildSQLType(attrs, base, subtype),
-
-    description: `PostGIS ${label} type – accepts WKT, EWKT or simple GeoJSON.`,
-
-    attributes: getTypeAttributes(def),
-    validate_attributes: validateAttributes,
-    presets: {},
-
-    fieldviews: {
-      show: makeShowView(),
-      edit: makeEditView(name, `e.g. ${(subtype || 'POINT')}(30 10)`),
-    },
-
-    /**
-     * Coerce a JS value (string, GeoJSON, etc.) to a canonical WKT string.
-     *
-     * @param {unknown} v
-     * @param {Partial<PostGISTypeAttributes>=} fieldAttrs
-     * @returns {string|undefined}
-     */
-    read: (v, fieldAttrs = {}) => {
-      if (
-        v === undefined ||
-        v === null ||
-        (typeof v === 'string' && v.trim() === '')
-      ) {
-        return undefined;
-      }
-
-      if (typeof v === 'string') {
-        const s = v.trim();
-        if (!s) return undefined;
-
-        const targetSubtype =
-          (def.allowSubtype && fieldAttrs.subtype
-            ? String(fieldAttrs.subtype)
-            : subtype) || undefined;
-
-        const dimStr = fieldAttrs.dim || '';
-
-        if (
-          targetSubtype &&
-          !validateWKT(s, targetSubtype.toUpperCase(), dimStr)
-        ) {
-          return undefined;
-        }
-        return s;
-      }
-
-      // GeoJSON or other structured input
-      if (typeof v === 'object') {
-        if (typeof v.wkt === 'string') return v.wkt;
-        if (typeof v.toWKT === 'function') return v.toWKT();
-        const wkt = geojsonToWKT(/** @type {any} */(v));
-        return wkt ?? undefined;
-      }
-
-      return undefined;
-    },
-
-    /**
-     * Per‑value validator (called by Saltcorn).
-     *
-     * @param {Partial<PostGISTypeAttributes>=} attrs
-     * @returns {(value: unknown) => true|string}
-     */
-    validate: (attrs) => (value) => {
-      if (value === undefined || value === null || value === '') return true;
-      if (typeof value !== 'string') return 'Value must be a WKT string';
-
-      const s = value.trim();
-      if (!s) return true;
-
-      const typeConstraint = def.allowSubtype && attrs?.subtype
-        ? String(attrs.subtype).toUpperCase()
-        : subtype || '';
-
-      const dimConstraint = attrs?.dim || '';
-
-      if (
-        typeConstraint &&
-        !validateWKT(s, typeConstraint, dimConstraint)
-      ) {
-        return `Must be WKT of ${typeConstraint}${dimConstraint}`;
-      }
-      return true;
-    },
-
-    /**
-     * Pass‑through when reading from DB.
-     *
-     * @param {unknown} v
-     * @returns {string|undefined}
-     */
+    sql_name: sqlNameFactory(base, subtype),
+    description: `PostGIS ${label} value`,
+    attributes,
+    validate_attributes: validateAttrs,
+    fieldviews,
+    read: (v) => (typeof v === 'string' ? v : undefined),
     readFromDB: (v) => (typeof v === 'string' ? v : undefined),
   };
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                Registration                                */
-/* -------------------------------------------------------------------------- */
+/* ──────────────────────────  Type catalogue  ───────────────────────────── */
 
-const types = ALL_SPATIAL_TYPE_DEFS.map(makeSpatialType);
+const INTERNAL_TYPES = [
+  // Generic “container” types
+  { name: 'geometry', base: 'GEOMETRY', subtype: '', allowSubtype: true, allowDim: true },
+  { name: 'geography', base: 'GEOGRAPHY', subtype: '', allowSubtype: true, allowDim: true },
 
+  // Frequent concrete types
+  { name: 'point', base: 'GEOMETRY', subtype: 'POINT', allowSubtype: false, allowDim: true },
+  { name: 'linestring', base: 'GEOMETRY', subtype: 'LINESTRING', allowSubtype: false, allowDim: true },
+  { name: 'polygon', base: 'GEOMETRY', subtype: 'POLYGON', allowSubtype: false, allowDim: true },
+  { name: 'multipoint', base: 'GEOMETRY', subtype: 'MULTIPOINT', allowSubtype: false, allowDim: true },
+  { name: 'multilinestring', base: 'GEOMETRY', subtype: 'MULTILINESTRING', allowSubtype: false, allowDim: true },
+  { name: 'multipolygon', base: 'GEOMETRY', subtype: 'MULTIPOLYGON', allowSubtype: false, allowDim: true },
+  { name: 'geometrycollection', base: 'GEOMETRY', subtype: 'GEOMETRYCOLLECTION', allowSubtype: false, allowDim: true },
+
+  // Specialist
+  { name: 'circularstring', base: 'GEOMETRY', subtype: 'CIRCULARSTRING', allowSubtype: false, allowDim: true },
+  { name: 'compoundcurve', base: 'GEOMETRY', subtype: 'COMPOUNDCURVE', allowSubtype: false, allowDim: true },
+  { name: 'curvepolygon', base: 'GEOMETRY', subtype: 'CURVEPOLYGON', allowSubtype: false, allowDim: true },
+  { name: 'multicurve', base: 'GEOMETRY', subtype: 'MULTICURVE', allowSubtype: false, allowDim: true },
+  { name: 'multisurface', base: 'GEOMETRY', subtype: 'MULTISURFACE', allowSubtype: false, allowDim: true },
+  { name: 'polyhedralsurface', base: 'GEOMETRY', subtype: 'POLYHEDRALSURFACE', allowSubtype: false, allowDim: true },
+  { name: 'tin', base: 'GEOMETRY', subtype: 'TIN', allowSubtype: false, allowDim: true },
+  { name: 'triangle', base: 'GEOMETRY', subtype: 'TRIANGLE', allowSubtype: false, allowDim: true },
+];
+
+/** Array of fully‑formed Saltcorn `Type` objects. */
+const types = INTERNAL_TYPES.map(makeType);
+
+/* ───────────────────── Table action: create real lat/lng ───────────────── */
+
+/**
+ * Convenience action visible under *Table ▸ Actions* that adds calculated
+ * Float columns (`ST_Y`, `ST_X`) for the first Point field in the table.
+ *
+ * @type {import('@saltcorn/types/base_plugin').TableAction}
+ */
+const createLatLngAction = {
+  name: 'Create lat/lng fields from Point',
+  description:
+    'Creates two calculated Float columns `<point>_lat` & `<point>_lng` using ST_Y/ST_X.',
+  isAsync: true,
+  requireRow: false,
+
+  /**
+   * @param {number} table_id
+   * @returns {Promise<{success?:string,error?:string}>}
+   */
+  async action(table_id) {
+    const tbl = await Table.findOne({ id: table_id });
+    if (!tbl) return { error: 'Table not found.' };
+
+    const pointField = (await tbl.getFields()).find((f) => f.type?.name === 'point');
+    if (!pointField) return { error: 'No Point field detected.' };
+
+    const base = pointField.name;
+    const lat = await Field.create({
+      table_id,
+      name: `${base}_lat`,
+      label: `${base} latitude`,
+      type: 'Float',
+      calculated: true,
+      expression: `ST_Y("${base}")`,
+    });
+    const lng = await Field.create({
+      table_id,
+      name: `${base}_lng`,
+      label: `${base} longitude`,
+      type: 'Float',
+      calculated: true,
+      expression: `ST_X("${base}")`,
+    });
+    await tbl.update({ min_role_read: tbl.min_role_read });
+    return { success: `Created fields #${lat.id} and #${lng.id}.` };
+  },
+};
+
+/* ───────────────────────────── Plug‑in export ──────────────────────────── */
+
+/**
+ * Saltcorn plug‑in metadata object (API v1).  Only keys understood by the
+ * loader are included – see `packages/saltcorn-data/base-plugin/index.js`.
+ *
+ * @type {import('@saltcorn/types/base_plugin').PluginMeta}
+ */
+/* -------------------------------------------------------------------------- */
+/*  Plug‑in export – ONLY keys recognised by Saltcorn’s loader                */
+/* -------------------------------------------------------------------------- */
+/**
+ * This object is what Saltcorn looks at when loading the plug‑in.  
+ * Nothing else is necessary.  If you add view‑templates, field‑views, routes,
+ * etc. you extend the same object with the documented keys.
+ *
+ * Everything referenced (`types`, `patchGetRows`, …) is defined above in the
+ * same file.
+ */
 module.exports = {
-  sc_plugin_api_version: 1,
+  /* -------------------------------------------------- Core identifiers ---- */
+  sc_plugin_api_version: 1,                // must be 1 for Saltcorn ≤ 1.x
+  plugin_name: 'saltcorn-postgis-type',    // must match directory / npm name
+
+  /* -------------------------------------------------- Life‑cycle hook ----- */
+  /**
+   * Called exactly once on server start (or when the plug‑in is enabled).
+   * We patch Table.getRows() here so every Point column exposes virtual
+   * <col>_lat and <col>_lng floats before the first request is served.
+   *
+   * @param {object=} _config   Unused – plug‑in is stateless.
+   */
+  onLoad(_config) {
+    const { Table: TableClass } = require('@saltcorn/data/models/table');
+    patchGetRows(TableClass);              // idempotent – safe to call twice
+  },
+
+  /* -------------------------------------------------- Front‑end assets ---- */
+  // Global <head> injections.  We inject Leaflet lazily in field‑views, so
+  // this stays empty for maximum performance.
+  headers: [],
+
+  /* -------------------------------------------------- Data‑types ---------- */
+  // Full PostGIS catalogue assembled earlier via INTERNAL_TYPES → makeType()
   types,
+
+  /* -------------------------------------------------- User‑triggerable ---- */
+  /**
+   * “Actions” are how Saltcorn surfaces *Table actions* **and**
+   * *Row actions*.  Setting `requireRow: false` means the action appears
+   * in Table ▸ Actions.  (There is no separate `table_actions` registry.)
+   */
+  actions: {
+    /**
+     * Add calculated `Float` columns `<point>_lat` / `<point>_lng`
+     * (ST_Y/ST_X) for the first Point field found in the table.
+     */
+    create_point_latlng_columns: {
+      requireRow: false,           // Table‑level action (no current row)
+      group: 'Database',           // Optional: display grouping in UI
+      description:
+        'Creates calculated Float columns <point>_lat and <point>_lng ' +
+        'using PostGIS ST_Y/ST_X.',
+      /**
+       * @param {object} opts
+       * @param {number} opts.table_id   Table being acted on
+       * @param {import('@saltcorn/data/models/user')} [opts.user]
+       * @returns {Promise<{success?: string, error?: string}>}
+       */
+      async run({ table_id }) {
+        const tbl = await Table.findOne({ id: table_id });
+        if (!tbl) return { error: 'Table not found.' };
+
+        const pointField = (await tbl.getFields()).find(
+          (f) => f.type?.name === 'point',
+        );
+        if (!pointField) return { error: 'No Point field detected.' };
+
+        const base = pointField.name;
+        const lat = await Field.create({
+          table_id,
+          name: `${base}_lat`,
+          label: `${base} latitude`,
+          type: 'Float',
+          calculated: true,
+          expression: `ST_Y("${base}")`,
+        });
+        const lng = await Field.create({
+          table_id,
+          name: `${base}_lng`,
+          label: `${base} longitude`,
+          type: 'Float',
+          calculated: true,
+          expression: `ST_X("${base}")`,
+        });
+
+        // Force Saltcorn to reload field metadata
+        await tbl.update({ min_role_read: tbl.min_role_read });
+        return {
+          success: `Created columns #${lat.id} and #${lng.id}.`,
+        };
+      },
+    },
+  },
+
+  /* -------------------------------------------------- Helper functions ---- */
+  /**
+   * Pure utilities exposed to code‑triggers, Workflows or other plug‑ins:
+   *
+   *   const { toLatLng } = require('saltcorn-postgis-type');
+   *   const { lat, lng } = toLatLng(row.location_wkt);
+   */
+  functions: {
+    /**
+     * Convert any POINT WKT to `{lat, lng, latlng}` or `undefined`.
+     *
+     * @param {string} wkt
+     * @returns {{lat: number, lng: number, latlng: [number, number]}|undefined}
+     */
+    toLatLng(wkt) {
+      const ll = wktToLonLat(wkt);
+      return ll ? { lat: ll[1], lng: ll[0], latlng: ll } : undefined;
+    },
+  },
+
+  /* -------------------------------------------------- npm deps ------------ */
+  // Saltcorn auto‑installs these on first plug‑in activation.
+  dependencies: ['wellknown'],
 };
