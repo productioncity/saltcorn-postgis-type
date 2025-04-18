@@ -21,12 +21,10 @@
 
 'use strict';
 
-const wellknown = require('wellknown');
 const { div, script, domReady, text: esc } = require('@saltcorn/markup/tags');
 
 /**
- * The base Leaflet assets are already defined in index.js (LEAFLET constant).
- * To stay isolated we generate the header again locally.
+ * Leaflet & Leaflet‑Draw CDN bundles
  */
 const LEAFLET = Object.freeze({
   css: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
@@ -38,8 +36,6 @@ const LEAFLET = Object.freeze({
     );
   },
 });
-
-/** External Leaflet‑Draw CDN assets. */
 const LEAFLET_DRAW = Object.freeze({
   css: 'https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css',
   js: 'https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js',
@@ -50,23 +46,14 @@ const LEAFLET_DRAW = Object.freeze({
     );
   },
 });
-
-/** Client‑side helper – loaded only once per page. */
 const WELLKNOWN_JS =
   '<script defer src="https://unpkg.com/wellknown@0.5.0/wellknown.js"></script>';
 
-/**
- * Inject Leaflet + Draw assets only on demand.
- *
- * @returns {string}
- */
 function leafletDrawHeader() {
   return LEAFLET.header + LEAFLET_DRAW.header + WELLKNOWN_JS;
 }
 
 /**
- * Build a leaflet‑draw editor field‑view.
- *
  * @param {'point'|'polygon'|'geometry'} kind
  * @returns {import('@saltcorn/types/base_plugin').FieldView}
  */
@@ -76,43 +63,34 @@ function makeDrawFieldView(kind) {
     blockDisplay: true,
     description: `Leaflet‑draw editor for ${kind}`,
 
-    /**
-     * @param {string} nm
-     * @param {string|undefined} value
-     * @param {import('@saltcorn/types/base_plugin').FieldAttributes=} attrs
-     * @param {string=} cls
-     * @param {boolean=} _req
-     * @param {import('@saltcorn/types/model-abstracts/abstract_field').Field=} field
-     * @returns {string}
-     */
-    run(nm, value, attrs = {}, cls, _req, field) {
+    /* Saltcorn runs this to build the HTML */
+    run(nm, value, attrs = {}, cls) {
       const id = `ld${Math.random().toString(36).slice(2)}`;
+
+      /* 3‑D altitude helper if dim contains Z */
       const needZ = String(attrs.dim || '').toUpperCase().includes('Z');
       const zId = `z${id}`;
-      const zInput = needZ
-        ? `<div class="mb-1"><label for="${zId}" class="form-label">Z&nbsp;(altitude)</label>` +
-          `<input id="${zId}" type="number" step="any" class="form-control" value="0"/></div>`
-        : '';
+      const zInput =
+        needZ
+          ? `<div class="mb-1"><label for="${zId}" class="form-label">Z&nbsp;(altitude)</label>` +
+            `<input id="${zId}" type="number" step="any" class="form-control" value="0"/>` +
+            '</div>'
+          : '';
 
-      /* ---------- HTML/JS to return ---------- */
+      /* ---------- HTML to send back ---------- */
 
-      // 1.  <link>/<script> assets (not escaped)
       const header = leafletDrawHeader();
 
-      // 2.  JS executed after DOM ready
       const js = `
 (function(){
-  /* Convert a Leaflet layer to WKT (runs in the browser) */
+  /* Helper: convert drawn layer → WKT */
   function layerToWkt(layer, wantZ, zVal) {
     const gj = layer.toGeoJSON();
     if (wantZ) {
-      (function addZ(coords) {
-        if (typeof coords[0] === 'number') {
-          if (coords.length === 2) coords.push(zVal);
-        } else {
-          coords.forEach(addZ);
-        }
-      })(gj.coordinates ?? gj.geometry?.coordinates ?? gj);
+      (function addZ(c) {
+        if (typeof c[0] === 'number') { if (c.length === 2) c.push(zVal); }
+        else c.forEach(addZ);
+      })(gj.geometry?.coordinates ?? gj.coordinates ?? gj);
     }
     return window.wellknown.stringify(gj);
   }
@@ -125,66 +103,49 @@ function makeDrawFieldView(kind) {
   const drawCtl = new L.Control.Draw(${JSON.stringify({
         draw:
           kind === 'point'
-            ? {
-                marker: true,
-                polygon: false,
-                polyline: false,
-                rectangle: false,
-                circle: false,
-                circlemarker: false,
-              }
+            ? { marker: true, polygon: false, polyline: false, rectangle: false, circle: false, circlemarker: false }
             : kind === 'polygon'
-              ? {
-                  marker: false,
-                  polygon: true,
-                  polyline: false,
-                  rectangle: false,
-                  circle: false,
-                  circlemarker: false,
-                }
-              : {
-                  polygon: true,
-                  polyline: true,
-                  rectangle: true,
-                  circle: false,
-                  circlemarker: false,
-                  marker: true,
-                },
+              ? { marker: false, polygon: true, polyline: false, rectangle: false, circle: false, circlemarker: false }
+              : { polygon: true, polyline: true, rectangle: true, circle: false, circlemarker: false, marker: true },
         edit: { featureGroup: 'PLACEHOLDER' },
       }).replace('"PLACEHOLDER"', 'drawn')}).addTo(map);
 
   const hidden = document.getElementById("inp${id}");
   function refreshHidden(){
-    const layers = [];
-    drawn.eachLayer(l => layers.push(
+    const out = [];
+    drawn.eachLayer(l => out.push(
       layerToWkt(l, ${needZ}, parseFloat(document.getElementById("${zId}")?.value || 0))
     ));
-    hidden.value = layers.join(';');
+    hidden.value = out.join(';');
   }
 
   map.on(L.Draw.Event.CREATED, e => { drawn.addLayer(e.layer); refreshHidden(); });
   map.on(L.Draw.Event.EDITED, refreshHidden);
   map.on(L.Draw.Event.DELETED, refreshHidden);
 
-  /* Load initial value */
-  const initWkt = ${JSON.stringify(value || '')};
-  if (initWkt) {
-    const wkts = initWkt.split(';');
-    wkts.forEach(w => {
+  /* Load existing value */
+  (function loadInitial(){
+    const init = ${JSON.stringify(value || '')};
+    if (!init) return;
+    init.split(';').forEach(w => {
       try {
         const gj = window.wellknown.parse(w);
         const lyr = L.geoJSON(gj).getLayers()[0];
         drawn.addLayer(lyr);
-      } catch {}
+      } catch{}
     });
-    if (drawn.getLayers().length) {
+    if (drawn.getLayers().length)
       map.fitBounds(drawn.getBounds());
-    }
-  }
-  if (!drawn.getLayers().length) map.setView([0, 0], 2);
+  })();
+
+  /* Default centre = Sydney if still empty */
+  if (!drawn.getLayers().length) map.setView([-33.8688, 151.2093], 11);
+
+  /* Grey‑box fix: invalidate size when control becomes visible */
+  const obs = new ResizeObserver(() => map.invalidateSize());
+  obs.observe(document.getElementById("${id}"));
 })();`;
 
-      // 3.  Final HTML string Saltcorn receives
       return (
         header +
         `<div class="${cls || ''}">` +
@@ -199,9 +160,7 @@ function makeDrawFieldView(kind) {
 }
 
 /**
- * Register the new field‑views onto the plug‑in’s types array.
- *
- * @param {import('@saltcorn/types/base_plugin').Type[]} types
+ * Attach leaflet_draw to each supported PostGIS type.
  */
 function registerLeafletDrawFieldViews(types) {
   for (const t of types) {
@@ -215,17 +174,14 @@ function registerLeafletDrawFieldViews(types) {
       case 'geometry':
       case 'geography':
       case 'geometrycollection':
+      case 'multipoint':
       case 'multilinestring':
       case 'multipolygon':
-      case 'multipoint':
         t.fieldviews.leaflet_draw = makeDrawFieldView('geometry');
         break;
-      default:
-        break;
+      /* others (circularstring etc.) deliberately skipped */
     }
   }
 }
 
-module.exports = {
-  registerLeafletDrawFieldViews,
-};
+module.exports = { registerLeafletDrawFieldViews };
