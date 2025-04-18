@@ -38,6 +38,9 @@ const Table =
 const Field = require('@saltcorn/data/models/field');
 const { div, script, domReady, text: esc } = require('@saltcorn/markup/tags');
 const wellknown = require('wellknown'); // tiny WKT ⇆ GeoJSON converter
+const {
+  registerLeafletDrawFieldViews,
+} = require('./postgis-leaflet-draw-fieldviews'); // ← Added
 
 /* ────────────────────────────── Constants ──────────────────────────────── */
 
@@ -366,6 +369,7 @@ const INTERNAL_TYPES = [
 
 /** Array of fully‑formed Saltcorn `Type` objects. */
 const types = INTERNAL_TYPES.map(makeType);
+registerLeafletDrawFieldViews(types);
 
 /* ───────────────────── Table action: create real lat/lng ───────────────── */
 
