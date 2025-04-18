@@ -20,9 +20,23 @@
 /* eslint-disable camelcase, max-lines, max-len */
 
 /* ─────────────────────── External dependencies ─────────────────────────── */
-const { div, script, domReady, text: esc } = require('@saltcorn/markup/tags');
-const Table = require('@saltcorn/data/models/table');
+
+/**
+ * Saltcorn ≤ 0.x exports the `Table` class directly, whereas Saltcorn ≥ 1.x
+ * wraps it in an object (`{ Table }`).  The defensive import below works for
+ * both shapes, ensuring the plug‑in stays compatible across versions.
+ */
+const TableMod = require('@saltcorn/data/models/table');
+// The actual Table class (has .findOne, .prototype, etc.)
+const Table =
+  TableMod && typeof TableMod.findOne === 'function'
+    ? TableMod
+    : TableMod && TableMod.Table
+      ? TableMod.Table
+      : TableMod;
+
 const Field = require('@saltcorn/data/models/field');
+const { div, script, domReady, text: esc } = require('@saltcorn/markup/tags');
 const wellknown = require('wellknown'); // tiny WKT ⇆ GeoJSON converter
 
 /* ────────────────────────────── Constants ──────────────────────────────── */
@@ -403,29 +417,10 @@ const createLatLngAction = {
 
 /* ───────────────────────────── Plug‑in export ──────────────────────────── */
 
-/**
- * Saltcorn plug‑in metadata object (API v1).  Only keys understood by the
- * loader are included – see `packages/saltcorn-data/base-plugin/index.js`.
- *
- * @type {import('@saltcorn/types/base_plugin').PluginMeta}
- */
-/* -------------------------------------------------------------------------- */
-/*  Plug‑in export – ONLY keys recognised by Saltcorn’s loader                */
-/* -------------------------------------------------------------------------- */
-/**
- * This object is what Saltcorn looks at when loading the plug‑in.  
- * Nothing else is necessary.  If you add view‑templates, field‑views, routes,
- * etc. you extend the same object with the documented keys.
- *
- * Everything referenced (`types`, `patchGetRows`, …) is defined above in the
- * same file.
- */
 module.exports = {
-  /* -------------------------------------------------- Core identifiers ---- */
-  sc_plugin_api_version: 1,                // must be 1 for Saltcorn ≤ 1.x
-  plugin_name: 'saltcorn-postgis-type',    // must match directory / npm name
+  sc_plugin_api_version: 1,
+  plugin_name: 'saltcorn-postgis-type',
 
-  /* -------------------------------------------------- Life‑cycle hook ----- */
   /**
    * Called exactly once on server start (or when the plug‑in is enabled).
    * We patch Table.getRows() here so every Point column exposes virtual
@@ -434,42 +429,32 @@ module.exports = {
    * @param {object=} _config   Unused – plug‑in is stateless.
    */
   onLoad(_config) {
-    const { Table: TableClass } = require('@saltcorn/data/models/table');
-    patchGetRows(TableClass);              // idempotent – safe to call twice
+    // Robustly obtain the actual Table class across Saltcorn versions.
+    let TableClass = require('@saltcorn/data/models/table');
+    if (TableClass && TableClass.Table) {
+      TableClass = TableClass.Table;
+    }
+    if (!TableClass || !TableClass.prototype) {
+      // eslint-disable-next-line no-console
+      console.error(
+        'saltcorn-postgis-type: Unable to patch Table.getRows() – Table class not found.',
+      );
+      return;
+    }
+    patchGetRows(TableClass); // idempotent – safe to call twice
   },
 
-  /* -------------------------------------------------- Front‑end assets ---- */
-  // Global <head> injections.  We inject Leaflet lazily in field‑views, so
-  // this stays empty for maximum performance.
   headers: [],
 
-  /* -------------------------------------------------- Data‑types ---------- */
-  // Full PostGIS catalogue assembled earlier via INTERNAL_TYPES → makeType()
   types,
 
-  /* -------------------------------------------------- User‑triggerable ---- */
-  /**
-   * “Actions” are how Saltcorn surfaces *Table actions* **and**
-   * *Row actions*.  Setting `requireRow: false` means the action appears
-   * in Table ▸ Actions.  (There is no separate `table_actions` registry.)
-   */
   actions: {
-    /**
-     * Add calculated `Float` columns `<point>_lat` / `<point>_lng`
-     * (ST_Y/ST_X) for the first Point field found in the table.
-     */
     create_point_latlng_columns: {
-      requireRow: false,           // Table‑level action (no current row)
-      group: 'Database',           // Optional: display grouping in UI
+      requireRow: false,
+      group: 'Database',
       description:
         'Creates calculated Float columns <point>_lat and <point>_lng ' +
         'using PostGIS ST_Y/ST_X.',
-      /**
-       * @param {object} opts
-       * @param {number} opts.table_id   Table being acted on
-       * @param {import('@saltcorn/data/models/user')} [opts.user]
-       * @returns {Promise<{success?: string, error?: string}>}
-       */
       async run({ table_id }) {
         const tbl = await Table.findOne({ id: table_id });
         if (!tbl) return { error: 'Table not found.' };
@@ -497,7 +482,6 @@ module.exports = {
           expression: `ST_X("${base}")`,
         });
 
-        // Force Saltcorn to reload field metadata
         await tbl.update({ min_role_read: tbl.min_role_read });
         return {
           success: `Created columns #${lat.id} and #${lng.id}.`,
@@ -506,27 +490,12 @@ module.exports = {
     },
   },
 
-  /* -------------------------------------------------- Helper functions ---- */
-  /**
-   * Pure utilities exposed to code‑triggers, Workflows or other plug‑ins:
-   *
-   *   const { toLatLng } = require('saltcorn-postgis-type');
-   *   const { lat, lng } = toLatLng(row.location_wkt);
-   */
   functions: {
-    /**
-     * Convert any POINT WKT to `{lat, lng, latlng}` or `undefined`.
-     *
-     * @param {string} wkt
-     * @returns {{lat: number, lng: number, latlng: [number, number]}|undefined}
-     */
     toLatLng(wkt) {
       const ll = wktToLonLat(wkt);
       return ll ? { lat: ll[1], lng: ll[0], latlng: ll } : undefined;
     },
   },
 
-  /* -------------------------------------------------- npm deps ------------ */
-  // Saltcorn auto‑installs these on first plug‑in activation.
   dependencies: ['wellknown'],
 };
