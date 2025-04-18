@@ -333,7 +333,7 @@ function makeType(def) {
     validate_attributes: validateAttrs,
     fieldviews,
     read: (v) => (typeof v === 'string' ? v : undefined),
-    readFromDB: (v) => (typeof v === 'string' ? v : undefined),
+    readFromDB: (v) => (typeof v === 'string' ? `${v}::text` : undefined),
   };
 }
 
