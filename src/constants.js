@@ -41,10 +41,17 @@ const BASE_GEOM_TYPES = Object.freeze([
 ]);
 
 /**
+ * Fallback map centre = Sydney, Australia.
+ * @type {{lat:number,lng:number,zoom:number}}
+ */
+const DEFAULT_CENTER = Object.freeze({
+  lat:  -33.8688,
+  lng:  151.2093,
+  zoom: 12,
+});
+
+/**
  * Local Leaflet 1.9.4 assets bundled inside the plug‑in’s “public” folder.
- *
- * They are intentionally namespaced under our plug‑in to avoid clashing with
- * the (optional) `@saltcorn/leaflet-map` plug‑in.
  *
  * @typedef {Object} LeafletStatic
  * @property {string} css   – Absolute URL of leaflet.css
@@ -59,9 +66,6 @@ const LEAFLET = Object.freeze({
   js:  `/plugins/public/${PLUGIN_SLUG}/leaflet.js`,
   /**
    * Returns HTML that loads Leaflet only if `window.L` is not already defined.
-   *
-   * It places `id` attributes on the elements so duplicate injection is easy
-   * to detect (Saltcorn re‑uses field‑views many times in a single page).
    *
    * @returns {string}
    */
@@ -80,4 +84,5 @@ module.exports = {
   DIM_MODS,
   BASE_GEOM_TYPES,
   LEAFLET,
+  DEFAULT_CENTER,
 };

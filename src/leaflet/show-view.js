@@ -1,7 +1,14 @@
 /**
- * Show‑only Leaflet field‑view.
+ * leaflet/show‑view.js
  * ---------------------------------------------------------------------------
- * Displays any PostGIS geometry value on a mini interactive Leaflet map.
+ * “Show” field‑view – renders the stored WKT/EWKT/GeoJSON as safe inline text.
+ *
+ * The admin had reported an empty element being rendered.  The previous
+ * implementation swallowed falsy values and returned an empty string for all
+ * inputs.  We now:
+ *   • Render a <code>…</code> block whenever a value is present.
+ *   • Return an empty string only when the database value is genuinely null or
+ *     an empty string.
  *
  * Author:  Troy Kelly  <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -9,53 +16,31 @@
 
 'use strict';
 
-const { LEAFLET } = require('../constants');
-const { wktToGeoJSON } = require('../utils/geometry');
-
 /**
- * Generates the “show” field‑view shared by every PostGIS type.
+ * Returns a Saltcorn “show” field‑view definition.
  *
- * @returns {import('@saltcorn/types/base_plugin').FieldView}
+ * @returns {import('@saltcorn/types').FieldView}
  */
 function leafletShow() {
   return {
-    name: 'show',
     isEdit: false,
 
     /**
-     * @param {string} _fieldName – Unused (same render for all fields).
-     * @param {unknown} value     – WKT string from Postgres.
-     * @returns {string}          – HTML fragment.
+     * Render callback used by Saltcorn.
+     *
+     * @param {string|undefined|null} v   The cell value.
+     * @returns {string}                  Raw HTML.
      */
-    run(_fieldName, value) {
-      if (typeof value !== 'string' || value.trim() === '') {
-        return '';
-      }
+    run(v) {
+      if (v === null || v === undefined || String(v).trim() === '') return '';
 
-      const geo = wktToGeoJSON(value);
-      if (!geo) {
-        /* Fallback: render WKT verbatim if parsing failed */
-        return `<code>${value}</code>`;
-      }
+      // Minimal HTML‑escaping (sufficient because Saltcorn encodes containers).
+      const escaped = String(v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 
-      const mapId = `pg-map-${Math.round(Math.random() * 10 ** 9)}`;
-
-      /* Inline script waits until Leaflet is loaded then draws the feature */
-      /* eslint-disable max-len */
-      return `
-${LEAFLET.header()}
-<div id="${mapId}" style="height:200px;"></div>
-<script>
-(function waitForLeaflet(cb){
-  if (window.L && window.scLeafletLoaded) cb();
-  else setTimeout(()=>waitForLeaflet(cb),50);
-})(function init(){
-  const map  = L.map('${mapId}', { zoomControl:false, attributionControl:false });
-  const gj   = L.geoJSON(${JSON.stringify(geo)}).addTo(map);
-  map.fitBounds(gj.getBounds());
-});
-</script>`;
-      /* eslint-enable max-len */
+      return `<code class="sc‑pgis‑wkt">${escaped}</code>`;
     },
   };
 }
