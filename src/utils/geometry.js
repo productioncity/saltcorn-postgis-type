@@ -12,6 +12,8 @@
  * Author:       Troy Kelly <troy@team.production.city>
  * First‑created: 2024‑04‑17
  * This revision: 2025‑04‑19 – Added WKB handling + full normalisation.
+ *              2025‑04‑19b – Robust 3‑D (Z/M) ➜ 2‑D GeoJSON conversion
+ *                            via `wkx`, fixing blank maps for Z geometries.
  * Licence:      CC0‑1.0  (see LICENCE)
  */
 
@@ -25,7 +27,7 @@ let   wkx;                   // Lazy‑required – optional dependency.
 
 try {
   // `wkx` is a tiny (25 kB) pure‑JS library, MIT‑licensed.
-  // It converts WKB <→> WKT/GeoJSON very efficiently.
+  // It converts WKB/WKT <→> WKT/GeoJSON very efficiently.
   // eslint-disable-next-line global-require
   wkx = require('wkx');
 } catch {
@@ -101,6 +103,47 @@ function decodeHexWkb(hex, as) {
   }
 }
 
+/**
+ * Recursively strips Z/M / extra‑ordinate values from a GeoJSON coordinates
+ * array, returning a *new* structure so the original is never mutated.
+ *
+ * @param {unknown} coords
+ * @returns {unknown}
+ */
+function stripZCoords(coords) {
+  if (!Array.isArray(coords)) return coords;
+  if (typeof coords[0] === 'number') {
+    // Leaf node – keep just the first 2 numbers (x/y or lng/lat).
+    return coords.slice(0, 2);
+  }
+  return coords.map(stripZCoords);
+}
+
+/**
+ * Deep‑copies and purges Z/M dimensions across *all* geometries.
+ *
+ * @template {Record<string, unknown>} T
+ * @param {T} geojson
+ * @returns {T}
+ */
+function stripZFromGeoJSON(geojson) {
+  /** @type {T} */
+  const clone = JSON.parse(JSON.stringify(geojson));
+
+  /** @param {Record<string, unknown>} g */
+  function recurse(g) {
+    if (g.type === 'GeometryCollection' && Array.isArray(g.geometries)) {
+      g.geometries.forEach(recurse);
+    } else if ('coordinates' in g) {
+      // @ts-ignore – run‑time structure inspection
+      g.coordinates = stripZCoords(g.coordinates);
+    }
+  }
+
+  recurse(clone);
+  return clone;
+}
+
 /* ───────────────────────── Public helpers ─────────────────────────── */
 
 /**
@@ -145,7 +188,12 @@ function wktToLonLat(value) {
 }
 
 /**
- * Convert WKT / EWKT / hex‑WKB to GeoJSON (best‑effort for 2‑D geometries).
+ * Convert WKT / EWKT / hex‑WKB to *2‑D* GeoJSON.
+ *
+ * Uses `wkx` for parity with PostGIS (handles 3‑D, measures, collections).
+ * Falls back to `wellknown` for very old Node environments where wkx might
+ * be unavailable. Regardless of input dimensionality, **output is always
+ * 2‑D** to keep downstream mapping libraries happy.
  *
  * @param {unknown} value
  * @returns {Record<string, unknown>|undefined}
@@ -154,24 +202,38 @@ function wktToGeoJSON(value) {
   dbg.trace('wktToGeoJSON()', { value });
   if (typeof value !== 'string' || value.trim() === '') return undefined;
 
-  const txt = stripPgCast(value.trim());
+  const raw = stripPgCast(value.trim());
 
-  // 1. Hex‑WKB?
-  const hexDecoded = decodeHexWkb(txt, 'geojson');
-  if (hexDecoded) return hexDecoded;
+  /* 1. Hex‑WKB? (fast‑path) */
+  const hexDecoded = decodeHexWkb(raw, 'geojson');
+  if (hexDecoded) return stripZFromGeoJSON(hexDecoded);
 
-  // 2. Try as‑is (covers SRID=…;WKT, with or without Z/M/ZM).
-  let normalised = txt.replace(/^SRID=\d+;/iu, '');
+  /* 2. Drop `SRID=…;` so libraries don’t choke on it. */
+  const txt = raw.replace(/^SRID=\d+;/iu, '');
 
+  /* 3. Prefer `wkx` if available – it happily parses 3‑D + collections. */
+  if (wkx) {
+    try {
+      const geom = wkx.Geometry.parse(txt);
+      const gj   = /** @type {Record<string, unknown>} */ (geom.toGeoJSON());
+      dbg.debug('wktToGeoJSON() via wkx');
+      return stripZFromGeoJSON(gj);
+    } catch (e) {
+      dbg.warn('wkx parse failed – falling back to wellknown', e);
+      // Fall‑through.
+    }
+  }
+
+  /* 4. Legacy fallback – `wellknown` (2‑D only). */
   try {
-    return wellknown.parse(normalised);
+    return wellknown.parse(txt);
   } catch {
-    // 3. Retry after stripping any Z/M/ZM.
-    normalised = normalised.replace(/\b([A-Z]+)(?:ZM|Z|M)\b/iu, '$1');
+    // Retry after stripping any explicit Z/M suffix.
+    const normalised = txt.replace(/\b([A-Z]+)(?:ZM|Z|M)\b/iu, '$1');
     try {
       return wellknown.parse(normalised);
-    } catch {
-      dbg.warn('wktToGeoJSON() failed for', normalised.slice(0, 40));
+    } catch (err) {
+      dbg.warn('wktToGeoJSON() final attempt failed', err);
       return undefined;
     }
   }
