@@ -1,38 +1,44 @@
 /**
  * text-edit-view.js
- * ---------------------------------------------------------------------------
- * “Raw WKT” edit field‑view – a plain <textarea> that lets users specify any
- * geometry (including Z/M/ZM dimensions) without the assistance of Leaflet.
+ * ----------------------------------------------------------------------------
+ * Fallback raw WKT editor for situations where Leaflet cannot run.
  *
- * This is provided as a back‑up editor when the visual map interface is
- * insufficient or power‑users want full control.
- *
- * Author:  Troy Kelly <troy@team.production.city>
+ * Author:  Troy Kelly  <troy@team.production.city>
  * Licence: CC0‑1.0
  */
 
 'use strict';
 
 /**
- * Factory returning the Saltcorn field‑view definition.
+ * Escapes HTML attribute/body values.
  *
+ * @param {unknown} val
+ * @returns {string}
+ */
+function esc(val) {
+  return String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
  * @returns {import('@saltcorn/types').FieldView}
  */
 function textEditView() {
   return {
+    name: 'raw',
+    displayName: 'Raw WKT',
     isEdit: true,
     /**
-     * Renders a <textarea>.
-     *
-     * @param {string} name       – Field name (form input name).
-     * @param {string|undefined} v – Current value.
+     * @param {string} field_name
+     * @param {string|undefined|null} v
+     * @param {object} attrs
+     * @param {string} cls
      * @returns {string}
      */
-    run(name, v) {
-      const safe = typeof v === 'string' ? v : '';
-      return `
-<textarea class="form-control" rows="3"
-          name="${name}" id="fld-${name}">${safe}</textarea>`;
+    run(field_name, v, attrs, cls) {
+      return `<textarea name="${field_name}" class="${cls}" rows="3">${esc(v)}</textarea>`;
     },
   };
 }
