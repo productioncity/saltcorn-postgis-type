@@ -3,6 +3,14 @@
  * ---------------------------------------------------------------------------
  * Produces full Saltcorn `Type` objects for every supported PostGIS subtype.
  *
+ * CHANGE‑LOG  (2025‑04‑19):
+ *   • Added three new field‑views:
+ *       – map  (interactive Leaflet editor)
+ *       – raw  (context‑sensitive raw/WKT view)
+ *       – show (read‑only Leaflet viewer)
+ *   • Previous `leafletEditView`, `leafletShow`, `textEditView` remain
+ *     untouched internally but are superseded by the new views.
+ *
  * Author:  Troy Kelly  <troy@team.production.city>
  * Licence: CC0‑1.0
  */
@@ -12,9 +20,10 @@
 const { DEFAULT_SRID, DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
 const { sqlNameFactory }  = require('../utils/sql-name');
 const { validateAttrs }   = require('../utils/geometry');
-const { leafletShow }     = require('../leaflet/show-view');
-const { leafletEditView } = require('../leaflet/edit-view');
-const { textEditView }    = require('../leaflet/text-edit-view'); // Raw WKT editor
+
+const { mapEditView } = require('../leaflet/map-edit-view');
+const { showView }    = require('../leaflet/show-view');
+const { rawView }     = require('../leaflet/raw-view');
 
 /**
  * Build a Saltcorn Type.
@@ -59,14 +68,14 @@ function makeType(cfg) {
 
   return Object.freeze({
     name,
-    sql_name: sqlNameFactory(base, subtype), // <- callable, string‑duck‑typed
+    sql_name: sqlNameFactory(base, subtype), // callable + string‑duck‑typed
     description: `PostGIS ${subtype || base} value`,
     attributes,
     validate_attributes: validateAttrs,
     fieldviews: {
-      show: leafletShow(),
-      edit: leafletEditView(name),
-      raw:  textEditView(),
+      map:  mapEditView(name), // interactive edit
+      raw:  rawView(),         // unified raw (show+edit)
+      show: showView(),        // read‑only Leaflet
     },
     read: (v) => (typeof v === 'string' ? v : undefined),
     readFromDB: (v) => (typeof v === 'string' ? `${v}::text` : undefined),
