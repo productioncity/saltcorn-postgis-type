@@ -62,7 +62,8 @@ function unpackArgs(args) {
  * @returns {string}
  */
 function js(v) {
-  return JSON.stringify(v).replace(/</g, '\\u003c');
+  const safe = v === undefined ? null : v;
+  return JSON.stringify(safe).replace(/</g, '\\u003c');
 }
 
 /* ───────────────────────────── Factory ────────────────────────────── */
@@ -96,14 +97,14 @@ function mapEditView(fallbackType = '') {
           ? Number(attrs.srid)
           : 4326;
 
-      const mapId   = `map_${Math.random().toString(36).slice(2)}`;
+      const mapId = `map_${Math.random().toString(36).slice(2)}`;
       const inputId = `inp_${mapId}`;
 
       /* Z‑dimension helper */
       const dimAttr = String(attrs?.dim ?? '').toUpperCase();
-      const wantZ   = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(current);
+      const wantZ = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(current);
       const initialZ = wantZ ? extractFirstZ(current) : 0;
-      const zId     = wantZ ? `z_${mapId}` : null;
+      const zId = wantZ ? `z_${mapId}` : null;
 
       /* Server‑side GeoJSON conversion – handles *everything*. */
       const initGeoJSON = wktToGeoJSON(current);
@@ -115,16 +116,15 @@ function mapEditView(fallbackType = '') {
 <div class="${cls}">
   <div id="${mapId}" class="border rounded" style="height:300px;"></div>
   <input type="hidden" id="${inputId}" name="${fieldName}" value="${current}">
-  ${
-    wantZ
-      ? `<div class="mt-1">
+  ${wantZ
+          ? `<div class="mt-1">
            <label for="${zId}" class="form-label mb-0">Z&nbsp;value</label>
            <input type="number" id="${zId}"
                   class="form-control form-control-sm" step="any"
                   value="${initialZ}">
          </div>`
-      : ''
-  }
+          : ''
+        }
 </div>
 
 <script>
