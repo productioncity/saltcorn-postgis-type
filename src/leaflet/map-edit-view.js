@@ -134,7 +134,7 @@ ${String(function scParsePoint(wkt) {
    */
   if (typeof wkt !== 'string') return null;
   wkt = wkt.replace(/^SRID=.*?;/i, '');
-  const m = wkt.match(/^POINT[^()]*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)/i);
+  const m = wkt.match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)/i);
   return m ? [Number(m[2]), Number(m[1])] : null; // [lat, lng]
 })}
 
@@ -206,7 +206,7 @@ ${String(function scParsePoint(wkt) {
 
     /* ---------- 4.2. Load existing geometry ---------- */
     try{
-      const init = hidden.value.trim().replace(/^SRID=\\d+;/i,'');
+      const init = hidden.value.trim().replace(/^SRID=\d+;/i,'');
       if(init){
         const gj  = window.wellknown.parse(init);
         const lyr = L.geoJSON(gj).addTo(fg);
