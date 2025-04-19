@@ -139,15 +139,15 @@ services:
       - PGADMIN_CONFIG_PROXY_X_PORT_COUNT=1
       - PGADMIN_CONFIG_PROXY_X_PREFIX_COUNT=1
       - PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION=True
-      - PGADMIN_CONFIG_SESSION_DB_PATH="/data/sessions"
-      - PGADMIN_CONFIG_SQLITE_PATH="/data/pgadmin4.db"
-      - PGADMIN_SERVER_JSON_FILE="/data/servers.json"
-      - PGADMIN_PREFERENCES_JSON_FILE="/data/preferences.json"
+      # - PGADMIN_CONFIG_SESSION_DB_PATH="/data/sessions"
+      # - PGADMIN_CONFIG_SQLITE_PATH="/data/pgadmin4.db"
+      # - PGADMIN_SERVER_JSON_FILE="/data/servers.json"
+      # - PGADMIN_PREFERENCES_JSON_FILE="/data/preferences.json"
       #- PGADMIN_CONFIG_DATA_DIR=/data
       - TZ=${TZ:-Australia/Sydney}
     volumes:
       - "/etc/timezone:/etc/timezone:ro"
-      - pgadmin:/data:rw
+      # - pgadmin:/data:rw
       - type: tmpfs
         target: "/tmp"
         tmpfs:
@@ -158,4 +158,4 @@ services:
 volumes:
   postgres:
   filestore:
-  pgadmin:
+  # pgadmin:
