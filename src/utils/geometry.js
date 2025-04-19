@@ -8,11 +8,12 @@
  *   • Optional `SRID=…;` prefix (EWKT).                     – in/out
  *   • Optional `Z`, `M`, `ZM` dimensionality suffix.       – in/out
  *   • Hex‑WKB returned by a plain `geometry::text` cast.    – in
- *   • Node‐Postgres binary column output (`Buffer`).        – in ⬅ NEW
+ *   • Node‐Postgres binary column output (`Buffer`).        – in
  *
  * Author:       Troy Kelly <troy@team.production.city>
  * First‑created: 2024‑04‑17
- * This revision: 2025‑04‑19c – Universal Buffer support + stricter guards.
+ * This revision: 2025‑04‑19d – Geometry‑collection fixes, single‑escape JSON,
+ *                              and robust Z‑extraction helper.
  * Licence:      CC0‑1.0  (see LICENCE)
  */
 
@@ -26,7 +27,6 @@ let   wkx;                   // Lazy‑required – optional dependency.
 
 try {
   // `wkx` is a tiny (25 kB) pure‑JS library, MIT‑licensed.
-  // It converts WKB/WKT <→> WKT/GeoJSON very efficiently.
   // eslint-disable-next-line global-require
   wkx = require('wkx');
 } catch {
@@ -44,9 +44,9 @@ const { DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
 /* ───────────────────────── Internal helpers ───────────────────────── */
 
 /**
- * Convert any Postgres driver return value into a plain string for further
- * processing.  The function is intentionally *lossy* – Buffers become their
- * hex representation, everything else is coerced with `${}` semantics.
+ * Safely converts **anything** we might receive from Postgres into a string
+ * for further processing. Buffers become their hex representation, everything
+ * else is coerced with `${}` semantics.
  *
  * @param {unknown} v
  * @returns {string|undefined}
@@ -59,7 +59,7 @@ function coerceToString(v) {
 }
 
 /**
- * Returns true if the input *string* looks like pure hexadecimal digits.
+ * Returns true if the supplied string is very likely hexadecimal.
  *
  * @param {string} txt
  * @returns {boolean}
@@ -109,7 +109,7 @@ function decodeHexWkb(hex, as) {
     // as === 'wkt'
     const srid = geom.srid && geom.srid !== 0 ? `SRID=${geom.srid};` : '';
     const wkt = /** @type {never} */ (`${srid}${geom.toWkt()}`);
-    dbg.debug('decodeHexWkb() ➜ WKT', wkt.slice(0, 32));
+    dbg.debug('decodeHexWkb() ➜ WKT', wkt.slice(0, 64));
     return wkt;
   } catch (e) {
     dbg.warn('decodeHexWkb() failed', e);
@@ -158,6 +158,51 @@ function stripZFromGeoJSON(geojson) {
   return clone;
 }
 
+/**
+ * Normalise any geometry‑only GeoJSON into something Leaflet understands
+ * 100 % of the time:  we always return either a Feature or FeatureCollection,
+ * never a bare geometry or GeometryCollection.
+ *
+ * @template {Record<string, unknown>} T
+ * @param {T|undefined} geom
+ * @returns {Record<string, unknown>|undefined}
+ */
+function normaliseGeoJSON(geom) {
+  if (!geom) return undefined;
+
+  /* Feature / FeatureCollection – already fine. */
+  if (geom.type === 'Feature' || geom.type === 'FeatureCollection') return geom;
+
+  /* GeometryCollection ➜ FeatureCollection */
+  if (geom.type === 'GeometryCollection' && Array.isArray(geom.geometries)) {
+    return {
+      type: 'FeatureCollection',
+      features: geom.geometries.map((g) => ({
+        type: 'Feature',
+        properties: {},
+        geometry: g,
+      })),
+    };
+  }
+
+  /* Simple geometry ➜ Feature */
+  return { type: 'Feature', properties: {}, geometry: geom };
+}
+
+/**
+ * Extract the first Z ordinate encountered inside **any** WKT/EWKT string.
+ * Falls back to 0 if none present.
+ *
+ * @param {string} src
+ * @returns {number}
+ */
+function extractFirstZ(src) {
+  const m = src.match(
+    /[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/,
+  );
+  return m ? Number(m[1]) : 0;
+}
+
 /* ───────────────────────── Public helpers ─────────────────────────── */
 
 /**
@@ -178,7 +223,7 @@ function toWkt(value) {
 
   // 2. Hex‑encoded WKB?
   const wkt = decodeHexWkb(txt, 'wkt');
-  dbg.trace('toWkt() result', wkt?.slice?.(0, 32));
+  dbg.trace('toWkt() result', wkt?.slice?.(0, 64));
   return wkt;
 }
 
@@ -223,7 +268,7 @@ function wktToGeoJSON(value) {
 
   /* 1. Hex‑WKB? (fast‑path) */
   const hexDecoded = decodeHexWkb(raw, 'geojson');
-  if (hexDecoded) return stripZFromGeoJSON(hexDecoded);
+  if (hexDecoded) return normaliseGeoJSON(stripZFromGeoJSON(hexDecoded));
 
   /* 2. Drop `SRID=…;` so libraries don’t choke on it. */
   const txt = raw.replace(/^SRID=\d+;/iu, '');
@@ -234,7 +279,7 @@ function wktToGeoJSON(value) {
       const geom = wkx.Geometry.parse(txt);
       const gj   = /** @type {Record<string, unknown>} */ (geom.toGeoJSON());
       dbg.debug('wktToGeoJSON() via wkx');
-      return stripZFromGeoJSON(gj);
+      return normaliseGeoJSON(stripZFromGeoJSON(gj));
     } catch (e) {
       dbg.warn('wkx parse failed – falling back to wellknown', e);
       // Fall‑through.
@@ -243,12 +288,12 @@ function wktToGeoJSON(value) {
 
   /* 4. Legacy fallback – `wellknown` (2‑D only). */
   try {
-    return wellknown.parse(txt);
+    return normaliseGeoJSON(wellknown.parse(txt));
   } catch {
     // Retry after stripping any explicit Z/M suffix.
     const normalised = txt.replace(/\b([A-Z]+)(?:ZM|Z|M)\b/iu, '$1');
     try {
-      return wellknown.parse(normalised);
+      return normaliseGeoJSON(wellknown.parse(normalised));
     } catch (err) {
       dbg.warn('wktToGeoJSON() final attempt failed', err);
       return undefined;
@@ -288,4 +333,6 @@ module.exports = {
   wktToLonLat,
   wktToGeoJSON,
   validateAttrs,
+  normaliseGeoJSON,
+  extractFirstZ,
 };

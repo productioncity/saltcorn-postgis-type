@@ -3,14 +3,6 @@
  * ----------------------------------------------------------------------------
  * Read‑only Leaflet viewer.
  *
- * This viewer is now robust against **all** call‑signatures that Saltcorn
- * may emit in either *show* or *edit* contexts:
- *
- *   • show‑mode (standard):              run({ value })           ← v ≥ 0.9  
- *   • legacy show‑mode:                  run(value)               ← v ≤ 0.8  
- *   • edit‑mode preview (isEdit = true): run(fieldName, value, …)  
- *   • edit‑mode preview (field object):  run(fieldObj,  value, …)
- *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
  */
@@ -18,7 +10,7 @@
 'use strict';
 
 const { DEFAULT_CENTER, LEAFLET } = require('../constants');
-const { wktToGeoJSON } = require('../utils/geometry');
+const { wktToGeoJSON }            = require('../utils/geometry');
 
 /**
  * Extract the geometry value regardless of the Saltcorn call signature.
@@ -60,11 +52,21 @@ function resolveValue(args) {
 }
 
 /**
+ * Safely serialise an arbitrary JS value for in‑page JS (single‑escaped).
+ *
+ * @param {unknown} v
+ * @returns {string}
+ */
+function js(v) {
+  return JSON.stringify(v).replace(/</g, '\\u003c');
+}
+
+/**
  * @returns {import('@saltcorn/types').FieldView}
  */
 function showView() {
   return {
-    name: 'show',
+    name:   'show',
     isEdit: false,
     /**
      * Renders a fixed‑height Leaflet map showing the supplied WKT/EWKT value.
@@ -79,29 +81,43 @@ function showView() {
       const value = resolveValue(args);
 
       /* -------------------------------------------------------------- *
-       * 2.  Build the Leaflet viewer.                                  *
+       * 2.  Server‑side WKT ➜ GeoJSON conversion (robust).             *
        * -------------------------------------------------------------- */
+      const gj = wktToGeoJSON(value);
+
+      /* 3.  Build the Leaflet viewer.                                  */
       const mapId = `show_${Math.random().toString(36).slice(2)}`;
-      const gj    = wktToGeoJSON(value);
       const { lat, lng, zoom } = DEFAULT_CENTER;
+
       return `
 <div id="${mapId}" style="height:250px;" class="border"></div>
 <script>
 (function(){
-  function css(h){return !!document.querySelector('link[href="'+h+'"]');}
-  function js(s){return !!(document._loadedScripts&&document._loadedScripts[s]);}
-  function addCss(h){return new Promise(r=>{if(css(h))return r();const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;document.head.appendChild(l);});}
-  function addJs(s){return new Promise(r=>{if(js(s))return r();const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};document.head.appendChild(sc);});}
+  const LEAF_CSS = ${js(LEAFLET.css)};
+  const LEAF_JS  = ${js(LEAFLET.js)};
+  const MAP_ID   = ${js(mapId)};
+  const GJ       = ${js(gj)};
+
+  function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
+  function haveJs(s){ return !!(document._loadedScripts && document._loadedScripts[s]);}
+  function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
+    const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;
+    document.head.appendChild(l);});}
+  function loadJs(s){return new Promise(r=>{if(haveJs(s))return r();
+    const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){
+      document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
+    document.head.appendChild(sc);});}
+
   (async function(){
-    await addCss(${JSON.stringify(LEAFLET.css)});
-    await addJs(${JSON.stringify(LEAFLET.js)});
-    const map=L.map(${JSON.stringify(mapId)}).setView([${lat},${lng}],${zoom});
+    await loadCss(LEAF_CSS);
+    await loadJs(LEAF_JS);
+    const map=L.map(MAP_ID).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-      attribution:'&copy; OpenStreetMap'
+      attribution:'&copy; OpenStreetMap contributors'
     }).addTo(map);
-    const gj=${JSON.stringify(gj)};
-    if(gj){
-      const lyr=L.geoJSON(gj).addTo(map);
+
+    if(GJ){
+      const lyr=L.geoJSON(GJ).addTo(map);
       map.fitBounds(lyr.getBounds(),{maxZoom:14});
     }
   })();
