@@ -4,12 +4,12 @@
  * Field‑view “edit” – interactive Leaflet editor that **guarantees** the WKT
  * sent back to Saltcorn matches the column’s SQL type.
  *
- * It now honours the column’s runtime `attrs.subtype` so a generic **geometry**
+ * It honours the column’s runtime `attrs.subtype` so a generic **geometry**
  * or **geography** field whose subtype has been set in the Saltcorn admin
  * interface (e.g. `GeometryCollection`, `MultiPolygon`, …) receives output of
- * the correct *concrete* geometry type. This fixes the
- * “Geometry type (Polygon) does not match column type (GeometryCollection)”
- * error reported when saving rows that contain a single feature.
+ * the correct *concrete* geometry type.  
+ * 
+ * 2025‑04‑20 – fixed an invalid RegExp escape that broke Node’s parser.
  *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -82,10 +82,7 @@ function mapEditView(fallbackType = '') {
         unpackArgs(arguments);
 
       /* ------------------------------------------------------------------ */
-      /* Resolve the concrete geometry type expected by the column.         *
-       *  – If the column is a generic “geometry”/“geography” but the user   *
-       *    selected a *subtype* in the Saltcorn UI, we must emit that.      *
-       *  – Otherwise fall back to the base type supplied by the factory.    */
+      /* Resolve the concrete geometry type expected by the column.         */
       /* ------------------------------------------------------------------ */
       const expectType = String(
         (attrs.subtype && `${attrs.subtype}`.toLowerCase()) || fallbackType,
