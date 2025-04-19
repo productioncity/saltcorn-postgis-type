@@ -2,16 +2,13 @@
  * map-edit-view.js
  * -----------------------------------------------------------------------------
  * Leaflet **edit** field‑view that outputs WKT guaranteed to match the column’s
- * SQL type, including:
- *
- *   • Generic geometry/geography columns with an explicit *sub‑type* set in
- *     the Saltcorn UI (e.g. GeometryCollection, MultiPolygon, …).
- *   • All concrete PostGIS types shipped by this plug‑in.
+ * SQL type – for both generic geometry/geography columns (with a chosen
+ * sub‑type) and every concrete PostGIS type shipped by this plug‑in.
  *
  * 2025‑04‑20 – bug‑fix #42  
- *   A stray back‑slash in the RegExp that parses POINT WKT caused Node to throw
- *   a “SyntaxError: Invalid regular expression – Unterminated group”.  
- *   The pattern has been simplified and tested under Node 20.
+ *   • Removed an extra back‑slash in the POINT‑parsing RegExp that caused the
+ *     “Unterminated group” SyntaxError under Node.  
+ *   • Regex unit‑tested against POINT and EWKT variants.
  *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -77,7 +74,7 @@ function mapEditView(fallbackType = '') {
     isEdit:      true,
     description: 'Interactive Leaflet editor whose WKT matches the column type.',
     /* eslint-disable max-lines-per-function */
-    run(/* dynamic – preserves Saltcorn’s ever‑changing signature */) {
+    run(/* dynamic – preserves Saltcorn’s variable signature */) {
       /* ──────────────── 1. Parameters & IDs ────────────────────── */
       const { name: fieldName, value: current, attrs = {}, cls = '' } =
         unpackArgs(arguments);
@@ -121,9 +118,7 @@ ${String(function scParsePoint(wkt) {
    */
   if (typeof wkt !== 'string') return null;
   wkt = wkt.replace(/^SRID=.*?;/i, '');
-  const m = wkt.match(
-    /^POINT[^()]*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)/
-  );
+  const m = wkt.match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)/i);
   return m ? [Number(m[2]), Number(m[1])] : null; // [lat, lng]
 })}
 
@@ -163,7 +158,7 @@ ${String(function scParsePoint(wkt) {
 
     /* ---------- 4.1. Load existing geometry ---------- */
     try{
-      const init = hidden.value.trim().replace(/^SRID=\\d+;/i,'');
+      const init = hidden.value.trim().replace(/^SRID=\d+;/i,'');
       if(init){
         const gj  = window.wellknown.parse(init);
         const lyr = L.geoJSON(gj).addTo(fg);
