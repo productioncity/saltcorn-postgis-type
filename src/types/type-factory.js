@@ -4,6 +4,7 @@
  * Generates Saltcorn `Type` objects for every PostGIS subtype.
  *
  * Updated 2025‑04‑19 – fully wires: edit (alias), map, raw, show.
+ * Updated 2025‑04‑19c – Robust `read()` that accepts Buffer/WKB directly.
  *
  * Author: Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -14,7 +15,7 @@
 const dbg = require('../utils/debug');
 const { DEFAULT_SRID, DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
 const { sqlNameFactory } = require('../utils/sql-name');
-const { validateAttrs } = require('../utils/geometry');
+const { validateAttrs, toWkt } = require('../utils/geometry');
 
 const { mapEditView } = require('../leaflet/map-edit-view');
 const { showView } = require('../leaflet/show-view');
@@ -73,7 +74,24 @@ function makeType(cfg) {
       raw: rawView(),
       show: showView(),
     },
-    read: (v) => (typeof v === 'string' ? v : undefined),
+
+    /* ----------------------------------------------------------------
+     * READ: normalise *anything* the driver gives us – Buffer (WKB),
+     *       hex, EWKT, WKT – into canonical EWKT for the UI layer.
+     * -------------------------------------------------------------- */
+    read: (v) => {
+      if (v === null || v === undefined) return undefined;
+      try {
+        return toWkt(
+          typeof v === 'object' && Buffer.isBuffer(v) ? v : String(v),
+        );
+      } catch (e) {
+        dbg.warn('type.read() failed', e);
+        return undefined;
+      }
+    },
+
+    /* Raw DB expression: always force EWKT so we never get untyped WKB */
     readFromDB: (v) => `ST_AsEWKT(${v})`,
   });
 

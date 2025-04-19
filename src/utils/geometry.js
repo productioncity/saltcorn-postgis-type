@@ -8,12 +8,11 @@
  *   • Optional `SRID=…;` prefix (EWKT).                     – in/out
  *   • Optional `Z`, `M`, `ZM` dimensionality suffix.       – in/out
  *   • Hex‑WKB returned by a plain `geometry::text` cast.    – in
+ *   • Node‐Postgres binary column output (`Buffer`).        – in ⬅ NEW
  *
  * Author:       Troy Kelly <troy@team.production.city>
  * First‑created: 2024‑04‑17
- * This revision: 2025‑04‑19 – Added WKB handling + full normalisation.
- *              2025‑04‑19b – Robust 3‑D (Z/M) ➜ 2‑D GeoJSON conversion
- *                            via `wkx`, fixing blank maps for Z geometries.
+ * This revision: 2025‑04‑19c – Universal Buffer support + stricter guards.
  * Licence:      CC0‑1.0  (see LICENCE)
  */
 
@@ -45,7 +44,22 @@ const { DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
 /* ───────────────────────── Internal helpers ───────────────────────── */
 
 /**
- * Returns true if the input LOOKS LIKE pure hexadecimal digits.
+ * Convert any Postgres driver return value into a plain string for further
+ * processing.  The function is intentionally *lossy* – Buffers become their
+ * hex representation, everything else is coerced with `${}` semantics.
+ *
+ * @param {unknown} v
+ * @returns {string|undefined}
+ */
+function coerceToString(v) {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === 'string') return v;
+  if (typeof v === 'object' && Buffer.isBuffer(v)) return v.toString('hex');
+  return String(v);
+}
+
+/**
+ * Returns true if the input *string* looks like pure hexadecimal digits.
  *
  * @param {string} txt
  * @returns {boolean}
@@ -135,7 +149,7 @@ function stripZFromGeoJSON(geojson) {
     if (g.type === 'GeometryCollection' && Array.isArray(g.geometries)) {
       g.geometries.forEach(recurse);
     } else if ('coordinates' in g) {
-      // @ts-ignore – run‑time structure inspection
+      // @ts-ignore
       g.coordinates = stripZCoords(g.coordinates);
     }
   }
@@ -154,8 +168,10 @@ function stripZFromGeoJSON(geojson) {
  */
 function toWkt(value) {
   dbg.trace('toWkt()', { value });
-  if (typeof value !== 'string' || value.trim() === '') return undefined;
-  const txt = stripPgCast(value.trim());
+  const coerced = coerceToString(value);
+  if (!coerced) return undefined;
+
+  const txt = stripPgCast(coerced.trim());
 
   // 1. Already looks like EWKT/WKT – fast exit.
   if (/^(SRID=\d+;)?[A-Z]+/u.test(txt)) return txt;
@@ -188,7 +204,7 @@ function wktToLonLat(value) {
 }
 
 /**
- * Convert WKT / EWKT / hex‑WKB to *2‑D* GeoJSON.
+ * Convert WKT / EWKT / hex‑WKB / Buffer to *2‑D* GeoJSON.
  *
  * Uses `wkx` for parity with PostGIS (handles 3‑D, measures, collections).
  * Falls back to `wellknown` for very old Node environments where wkx might
@@ -200,9 +216,10 @@ function wktToLonLat(value) {
  */
 function wktToGeoJSON(value) {
   dbg.trace('wktToGeoJSON()', { value });
-  if (typeof value !== 'string' || value.trim() === '') return undefined;
+  const coerced = coerceToString(value);
+  if (!coerced || coerced.trim() === '') return undefined;
 
-  const raw = stripPgCast(value.trim());
+  const raw = stripPgCast(coerced.trim());
 
   /* 1. Hex‑WKB? (fast‑path) */
   const hexDecoded = decodeHexWkb(raw, 'geojson');

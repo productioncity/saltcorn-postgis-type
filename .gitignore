@@ -7,10 +7,6 @@
 /llm.md
 /llm.py
 
-# Reference Source
-/leaflet
-/saltcorn
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
