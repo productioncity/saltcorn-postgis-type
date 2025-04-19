@@ -1,20 +1,13 @@
 /**
  * map-edit-view.js
  * -----------------------------------------------------------------------------
- * Leaflet **edit** field‑view that outputs WKT guaranteed to match the column’s
- * SQL type – for both generic geometry/geography columns (with a chosen
- * sub‑type) and every concrete PostGIS type shipped by this plug‑in.
+ * Leaflet **edit** field‑view that outputs EWKT guaranteed to match the
+ * column’s SQL definition (type + SRID + dimensionality).
  *
- * 2025‑04‑20 – bug‑fix #42  
- *   • Removed an extra back‑slash in the POINT‑parsing RegExp that caused the
- *     “Unterminated group” SyntaxError under Node.  
- *   • Regex unit‑tested against POINT and EWKT variants.
- *
- * 2025‑04‑21 – bug‑fix #48  
- *   • Z‑dimension supplied in the form was ignored → PostGIS rejected the
- *     row (*“Column has Z dimension but geometry does not”*).  The Z value is
- *     now injected into every coordinate and the resulting WKT gains the
- *     proper dimensional flag (“… Z (”).
+ * 2025‑04‑22 – critical‑fix #55  
+ *   • All generated WKT strings now carry the `SRID=<srid>;` prefix so that
+ *     inserts/updates succeed when the column is constrained to a specific
+ *     SRID.  Without this Postgres silently rejected the row (SRID 0 ≠ 4326…).
  *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -44,7 +37,7 @@ const WELLKNOWN_JS =
  * @returns {{name:string,value:string,attrs?:object,cls?:string}}
  */
 function unpackArgs(args) {
-  /** @type {string} */ let name  = '';
+  /** @type {string} */ let name = '';
   /** @type {string} */ let value = '';
   /** @type {object} */ let attrs;
   /** @type {string} */ let cls;
@@ -52,16 +45,16 @@ function unpackArgs(args) {
   if (args[0] && typeof args[0] === 'object' && 'name' in args[0]) {
     // Field‑object form
     // @ts-ignore – runtime shape check
-    name  = args[0].name;
+    name = args[0].name;
     value = args[1] ?? '';
     attrs = args[2];
-    cls   = args[3];
+    cls = args[3];
   } else {
     // Primitive form
-    name  = args[0] ?? '';
+    name = args[0] ?? '';
     value = args[1] ?? '';
     attrs = args[2];
-    cls   = args[3];
+    cls = args[3];
   }
   return { name, value: String(value ?? ''), attrs, cls };
 }
@@ -76,9 +69,10 @@ function unpackArgs(args) {
  */
 function mapEditView(fallbackType = '') {
   return {
-    name:        'edit',
-    isEdit:      true,
-    description: 'Interactive Leaflet editor whose WKT matches the column type.',
+    name: 'edit',
+    isEdit: true,
+    description: 'Interactive Leaflet editor whose EWKT matches the column type.',
+
     /* eslint-disable max-lines-per-function */
     run(/* dynamic – preserves Saltcorn’s variable signature */) {
       /* ──────────────── 1. Parameters & IDs ────────────────────── */
@@ -90,13 +84,19 @@ function mapEditView(fallbackType = '') {
         (attrs.subtype && `${attrs.subtype}`.toLowerCase()) || fallbackType,
       ).toLowerCase();
 
-      const mapId   = `map_${Math.random().toString(36).slice(2)}`;
+      /* SRID (falls back to WGS‑84) */
+      const sridVal =
+        attrs && Number.isFinite(Number(attrs.srid))
+          ? Number(attrs.srid)
+          : 4326;
+
+      const mapId = `map_${Math.random().toString(36).slice(2)}`;
       const inputId = `inp_${mapId}`;
 
       /* Z‑dimension helper */
       const dimAttr = String(attrs?.dim ?? '').toUpperCase();
-      const wantZ   = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(current);
-      const zId     = wantZ ? `z_${mapId}` : null;
+      const wantZ = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(current);
+      const zId = wantZ ? `z_${mapId}` : null;
 
       /* Extract an existing Z value if one is present, else 0 */
       let initialZ = 0;
@@ -114,29 +114,28 @@ function mapEditView(fallbackType = '') {
 <div class="${cls}">
   <div id="${mapId}" class="border rounded" style="height:300px;"></div>
   <input type="hidden" id="${inputId}" name="${fieldName}" value="${current}">
-  ${
-    wantZ
-      ? `<div class="mt-1">
+  ${wantZ
+          ? `<div class="mt-1">
            <label for="${zId}" class="form-label mb-0">Z&nbsp;value</label>
            <input type="number" id="${zId}"
                   class="form-control form-control-sm" step="any"
                   value="${initialZ}">
          </div>`
-      : ''
-  }
+          : ''
+        }
 </div>
 
 <script>
 ${String(function scParsePoint(wkt) {
-  /**
-   * Extract [lat, lng] from a POINT WKT/EWKT string. Returns null on failure.
-   * Accepts both `POINT(lon lat)` and `SRID=4326;POINT(lon lat)` variants.
-   */
-  if (typeof wkt !== 'string') return null;
-  wkt = wkt.replace(/^SRID=.*?;/i, '');
-  const m = wkt.match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)/i);
-  return m ? [Number(m[2]), Number(m[1])] : null; // [lat, lng]
-})}
+          /**
+           * Extract [lat, lng] from a POINT WKT/EWKT string. Returns null on failure.
+           * Accepts both `POINT(lon lat)` and `SRID=4326;POINT(lon lat)` variants.
+           */
+          if (typeof wkt !== 'string') return null;
+          wkt = wkt.replace(/^SRID=.*?;/i, '');
+          const m = wkt.match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)/i);
+          return m ? [Number(m[2]), Number(m[1])] : null; // [lat, lng]
+        })}
 
 /* ───────────── 3. Lazy‑load dependencies ───────────── */
 (function(){
@@ -167,6 +166,7 @@ ${String(function scParsePoint(wkt) {
 
     const WANT_Z = ${wantZ};
     const Z_ID   = ${JSON.stringify(zId)};
+    const SRID   = ${sridVal};                //  ←───── NEW (mandatory SRID)
 
     /* ---------- 4.0. Z helpers ---------------------- */
     function currentZ(){
@@ -239,22 +239,24 @@ ${String(function scParsePoint(wkt) {
       const gj = fg.toGeoJSON();
       if(!gj.features.length) return '';
 
+      let wkt;
+
       if(EXPECT==='geometrycollection'){
-        return (WANT_Z?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
+        wkt = (WANT_Z?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
+               gj.features.map(f=>window.wellknown.stringify(withZ(f.geometry))).join(',')+
+               ')';
+      } else if(EXPECT==='multipolygon' || EXPECT==='multilinestring' || EXPECT==='multipoint'){
+        wkt = buildMulti(EXPECT);
+      } else if(gj.features.length===1){
+        wkt = window.wellknown.stringify(withZ(gj.features[0].geometry));
+      } else {
+        /* Default – multiple features but non‑collection column */
+        wkt = (WANT_Z?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
                gj.features.map(f=>window.wellknown.stringify(withZ(f.geometry))).join(',')+
                ')';
       }
 
-      if(EXPECT==='multipolygon' || EXPECT==='multilinestring' || EXPECT==='multipoint')
-        return buildMulti(EXPECT);
-
-      if(gj.features.length===1)
-        return window.wellknown.stringify(withZ(gj.features[0].geometry));
-
-      /* Default – multiple features but non‑collection column */
-      return (WANT_Z?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
-             gj.features.map(f=>window.wellknown.stringify(withZ(f.geometry))).join(',')+
-             ')';
+      return wkt ? ('SRID='+SRID+';'+wkt) : '';   // ←── prepend SRID
     }
 
     function sync(){ hidden.value = toWkt(); }
