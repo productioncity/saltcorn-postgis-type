@@ -107,9 +107,10 @@ function mapEditView(expectedType = '') {
 
 <script>
 ${String(function scParsePoint(wkt) {
+  /* Extract [lat,lng] from a POINT WKT/EWKT string. */
   if (typeof wkt !== 'string') return null;
   wkt = wkt.replace(/^SRID=.*?;/i, '');
-  const m = wkt.match(/^POINT\\s*\\([^()]*\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)\\s*/i);
+  const m = wkt.match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*/i);
   return m ? [Number(m[2]), Number(m[1])] : null;
 })}
 
