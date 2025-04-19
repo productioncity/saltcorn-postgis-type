@@ -1,7 +1,10 @@
 /**
  * text-edit-view.js
- * ----------------------------------------------------------------------------
- * Fallback raw WKT editor for situations where Leaflet cannot run.
+ * -----------------------------------------------------------------------------
+ * Minimalist raw text editor for any PostGIS value.
+ *
+ * This view is surfaced as “raw” in the type catalogue and is handy when users
+ * explicitly prefer hand‑editing WKT/EWKT/GeoJSON without the Leaflet helper.
  *
  * Author:  Troy Kelly  <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -9,37 +12,36 @@
 
 'use strict';
 
-/**
- * Escapes HTML attribute/body values.
- *
- * @param {unknown} val
- * @returns {string}
- */
-function esc(val) {
-  return String(val ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/"/g, '&quot;');
-}
+const { textarea } = require('@saltcorn/markup/tags');
 
 /**
- * @returns {import('@saltcorn/types').FieldView}
+ * @returns {import('@saltcorn/types').FieldViewObj}
  */
 function textEditView() {
+  /**
+   * @param {string} fieldName
+   * @param {string|null} value
+   * @param {unknown} _attrs   Unused – kept for Saltcorn’s expected signature.
+   * @param {string} cls
+   * @returns {string}
+   */
+  const run = (fieldName, value, _attrs, cls) =>
+    textarea(
+      {
+        class: `form-control ${cls || ''}`.trim(),
+        style: 'min-height:6rem;font-family:monospace;',
+        name:  fieldName,
+        id:    `input-${fieldName}`,
+        placeholder: 'Enter WKT, EWKT or GeoJSON',
+      },
+      typeof value === 'string' ? value : '',
+    );
+
   return {
-    name: 'raw',
-    displayName: 'Raw WKT',
-    isEdit: true,
-    /**
-     * @param {string} field_name
-     * @param {string|undefined|null} v
-     * @param {object} attrs
-     * @param {string} cls
-     * @returns {string}
-     */
-    run(field_name, v, attrs, cls) {
-      return `<textarea name="${field_name}" class="${cls}" rows="3">${esc(v)}</textarea>`;
-    },
+    isEdit:       true,
+    description:  'Raw text WKT/EWKT/GeoJSON editor.',
+    configFields: [],
+    run,
   };
 }
 

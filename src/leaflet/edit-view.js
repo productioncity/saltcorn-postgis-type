@@ -1,138 +1,167 @@
 /**
  * edit-view.js
- * ----------------------------------------------------------------------------
- * Interactive Leaflet + Leaflet‑Draw editor for every PostGIS geometry type.
+ * -----------------------------------------------------------------------------
+ * Edit field‑view for all PostGIS types.
  *
- * Author:  Troy Kelly  <troy@team.production.city>
- * Licence: CC0‑1.0
+ * • For the common ‘point’ type an interactive Leaflet picker is provided.
+ *   Users click (or drag a marker) on the map to set the point; the hidden
+ *   form value is stored in canonical WKT (`POINT(lon lat)`).
+ * • For every other spatial type the view gracefully falls back to a plain
+ *   <textarea> for raw WKT/EWKT or GeoJSON input.
+ *
+ * Author:       Troy Kelly <troy@team.production.city>
+ * First‑created: 2025‑04‑19
+ * Licence:      CC0‑1.0
  */
 
 'use strict';
 
-const wellknown          = require('wellknown');
-const { wktToGeoJSON }   = require('../utils/geometry');
+const {
+  textarea,
+  div,
+  script,
+  input,
+} = require('@saltcorn/markup/tags');
+
 const { DEFAULT_CENTER } = require('../constants');
 
 /**
- * Escapes HTML text.
+ * Small client‑side helper – injected as string inside <script>.
+ * Parses WKT/EWKT `POINT(… …)` and returns `[lat, lng] | null`.
+ * Keep in ES5 syntax for maximum browser compatibility.
  *
- * @param {unknown} val
- * @returns {string}
+ * @returns {string}  Self‑contained JS function source.
  */
-function esc(val) {
-  return String(val ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/"/g, '&quot;');
+function inlinePointParserSource() {
+  /* eslint-disable func-names */
+  return String(function scParsePointWKT(wkt) {
+    if (typeof wkt !== 'string') return null;
+    const m = wkt
+      .replace(/^SRID=\d+;/i, '')
+      .match(/^POINT[^()]*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)\\s*\\)/i);
+    return m ? [Number(m[2]), Number(m[1])] : null; // [lat, lng]
+  });
+  /* eslint-enable func-names */
 }
 
 /**
- * Factory – builds a Leaflet edit view bound to a specific PostGIS type name.
+ * Builds the field‑view object for a concrete PostGIS type.
  *
- * @param {string} typeName
- * @returns {import('@saltcorn/types').FieldView}
+ * @param {string} typeName  Internal type name (e.g. 'point', 'polygon').
+ * @returns {import('@saltcorn/types').FieldViewObj}
  */
 function leafletEditView(typeName) {
-  const singleGeometry = !typeName.toLowerCase().startsWith('multi')
-    && typeName.toLowerCase() !== 'geometrycollection';
+  const isPoint = typeName === 'point';
 
-  return {
-    name: 'leaflet',
-    displayName: 'Leaflet map',
-    isEdit: true,
-    /**
-     * @param {string} field_name   DB column name.
-     * @param {string} v            Stored WKT (may be undefined).
-     * @param {object} attrs        Field attributes object.
-     * @param {string} cls          CSS classes.
-     * @returns {string}            HTML+JS for the editor.
-     */
-    run(field_name, v, attrs, cls) {
-      const mapId   = `sc_leaflet_edit_${Math.random().toString(36).slice(2)}`;
-      const inputId = `${mapId}_input`;
-      const geo     = wktToGeoJSON(v) || null;
-      const geoStr  = esc(JSON.stringify(geo));
+  /**
+   * @param {string}      fieldName  Name of the field in the form.
+   * @param {string|null} value      Current value (may be null on “new” forms).
+   * @param {unknown}     attrs      _Unused_ – kept for Saltcorn signature.
+   * @param {string}      cls        Additional CSS classes.
+   * @returns {string}               HTML markup for the edit control.
+   */
+  const run = (fieldName, value, attrs, cls) => {
+    /* ===================================================================== */
+    /* 1. Interactive POINT map‑picker                                      */
+    /* ===================================================================== */
+    if (isPoint) {
+      const mapId   = `sc-postgis-edit-map-${Math.random().toString(36).slice(2)}`;
+      const inputId = `input-${fieldName.replace(/[^A-Za-z0-9_-]/g, '')}`;
 
-      /* Pre‑select allowed draw shapes – everything for generic/multi types, else narrow. */
-      const drawOpts = singleGeometry
-        ? `{ marker:true, polyline:${/line/i.test(typeName)}, polygon:${/polygon/i.test(typeName)}, rectangle:${/polygon/i.test(typeName)}, circle:false, circlemarker:false }`
-        : 'false'; // Leaflet‑Draw default (all options)
+      /* Current coordinate or fallback to default centre (Sydney CBD). */
+      let initialLat = DEFAULT_CENTER.lat;
+      let initialLng = DEFAULT_CENTER.lng;
+      if (typeof value === 'string') {
+        const m = value
+          .replace(/^SRID=\d+;/i, '')
+          .match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*\)/i);
+        if (m) {
+          initialLng = Number(m[1]);
+          initialLat = Number(m[2]);
+        }
+      }
 
-      return `
-<input type="hidden" name="${field_name}" id="${inputId}" class="${cls}" value="${esc(v)}">
-<div id="${mapId}" class="sc-leaflet-edit" style="width:100%;height:320px;margin-top:4px;"></div>
+      return (
+        div(
+          { class: 'sc-postgis-point-edit' },
+          div({
+            id:    mapId,
+            style: 'width:100%;height:220px;border:1px solid #ced4da;border-radius:4px;margin-bottom:4px;',
+          }),
+        ) +
+        /* Hidden <input> carrying the actual field value */
+        input({
+          type:  'hidden',
+          id:    inputId,
+          name:  fieldName,
+          value: value || '',
+        }) +
+        script(
+          //<![CDATA[
+          `
+(${inlinePointParserSource()});
 
-<!-- Leaflet‑Draw + WellKnown client assets (loaded once per page) -->
-<link id="sc-leaflet-draw-css" rel="stylesheet"
-      href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"
-      onload="if(window.L&&window.L.Draw){this.remove();}">
-<script id="sc-leaflet-draw-js" src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js" defer
-        onload="window.scLeafletDrawLoaded=true;"></script>
-<script id="sc-wellknown-js" src="https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js" defer
-        onload="window.scWellknownLoaded=true;"></script>
+(function () {
+  var map, marker;
+  function init() {
+    var el   = document.getElementById('${mapId}');
+    var inp  = document.getElementById('${inputId}');
+    if (!el || !inp || !window.L) return;
 
-<script defer>
-(function(){
-  function ready(){
-    if(!window.L || !window.L.Draw || !window.wellknown){setTimeout(ready,50);return;}
+    var startLatLng = scParsePointWKT(inp.value) || [${initialLat}, ${initialLng}];
 
-    const map=L.map("${mapId}");
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
-      attribution:"&copy; OpenStreetMap contributors"
+    map = L.map(el).setView(startLatLng, 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors',
     }).addTo(map);
 
-    const drawnItems=new L.FeatureGroup();
-    map.addLayer(drawnItems);
+    marker = L.marker(startLatLng, { draggable: true }).addTo(map);
 
-    /* Populate existing geometry if any */
-    const g=${geoStr};
-    if(g){
-      L.geoJSON(g).eachLayer(l=>drawnItems.addLayer(l));
-      try{map.fitBounds(drawnItems.getBounds());}catch(e){}
-    }
-    if(!g){map.setView([${DEFAULT_CENTER.lat},${DEFAULT_CENTER.lng}],${DEFAULT_CENTER.zoom});}
-
-    /* Draw control */
-    const drawCtl=new L.Control.Draw({
-      edit:{ featureGroup:drawnItems, remove:true },
-      draw:${drawOpts}
-    });
-    map.addControl(drawCtl);
-
-    const input=document.getElementById("${inputId}");
-
-    /* Converts current layers to WKT and stores to hidden input */
-    function syncToInput(){
-      if(drawnItems.getLayers().length===0){input.value="";return;}
-
-      if(${singleGeometry}){
-        const geom=drawnItems.getLayers()[0].toGeoJSON().geometry;
-        input.value=window.wellknown.stringify(geom);
-        /* Ensure only one feature stays for single‑geometry types */
-        drawnItems.getLayers().slice(1).forEach(l=>drawnItems.removeLayer(l));
-      }else{
-        /* Multi / collection */
-        const fc=drawnItems.toGeoJSON();
-        const geom={
-          type:"GeometryCollection",
-          geometries:fc.features.map(f=>f.geometry),
-        };
-        input.value=window.wellknown.stringify(geom);
-      }
+    function sync(latlng) {
+      inp.value = 'POINT(' + latlng.lng + ' ' + latlng.lat + ')';
     }
 
-    map.on(L.Draw.Event.CREATED,function(e){
-      if(${singleGeometry}) drawnItems.clearLayers();
-      drawnItems.addLayer(e.layer);
-      syncToInput();
+    marker.on('dragend', function (e) {
+      sync(e.target.getLatLng());
     });
-    map.on(L.Draw.Event.EDITED, syncToInput);
-    map.on(L.Draw.Event.DELETED, syncToInput);
+
+    map.on('click', function (e) {
+      marker.setLatLng(e.latlng);
+      sync(e.latlng);
+    });
   }
-  ready();
-})();
-</script>`;
-    },
+
+  if (window.L && window.scLeafletLoaded) init();
+  else document.addEventListener('DOMContentLoaded', init);
+})();`,
+          //]]>
+        ),
+      );
+    }
+
+    /* ===================================================================== */
+    /* 2. Generic fallback – plain <textarea> for any non‑point geometry     */
+    /* ===================================================================== */
+    return textarea(
+      {
+        class: `form-control ${cls || ''}`.trim(),
+        style: 'min-height:6rem;font-family:monospace;',
+        name:  fieldName,
+        id:    `input-${fieldName}`,
+        placeholder: 'Enter WKT, EWKT or GeoJSON',
+      },
+      typeof value === 'string' ? value : '',
+    );
+  };
+
+  return {
+    isEdit:       true,
+    description:  isPoint
+      ? 'Interactive Leaflet point picker (with WKT hidden input).'
+      : 'Plain textarea for WKT/EWKT/GeoJSON input.',
+    configFields: [],
+    run,
   };
 }
 
