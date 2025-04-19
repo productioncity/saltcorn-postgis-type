@@ -3,8 +3,11 @@
  * ---------------------------------------------------------------------------
  * Generates Saltcorn `Type` objects for every PostGIS subtype.
  *
- * Updated 2025‑04‑19 – fully wires: edit (alias), map, raw, show.
- * Updated 2025‑04‑19c – Robust `read()` that accepts Buffer/WKB directly.
+ * Updated 2025‑04‑20 – robust edit/view matrix:
+ *   • edit   – interactive map
+ *   • raw    – textarea + preview
+ *   • map    – read‑only preview (edit context, good for immutable forms)
+ *   • show   – normal non‑edit view
  *
  * Author: Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -55,12 +58,14 @@ function makeType(cfg) {
     });
   }
 
-  /* ------------------------------------------------------------------ */
-  /* Field‑views                                                        */
-  /* ------------------------------------------------------------------ */
-  const baseMapFV = mapEditView();
-  const mapFV  = { ...baseMapFV, name: 'map',  isEdit: false };
-  const editFV = { ...baseMapFV, name: 'edit', isEdit: true };
+  /* ------------------------------------------------------------------
+   * Field‑views
+   * ------------------------------------------------------------------ */
+  const editFV = mapEditView();
+
+  // Re‑use the non‑edit “show” viewer but expose it inside the edit
+  // selection list (isEdit = true) so forms can opt‐in to a read‑only map.
+  const mapPreviewFV = { ...showView(), name: 'map', isEdit: true };
 
   const typeObj = Object.freeze({
     name,
@@ -69,13 +74,13 @@ function makeType(cfg) {
     attributes,
     validate_attributes: validateAttrs,
     fieldviews: {
-      map: mapFV,
       edit: editFV,
       raw: rawView(),
+      map: mapPreviewFV,
       show: showView(),
     },
 
-    /* ----------------------------------------------------------------
+    /* --------------------------------------------------------------
      * READ: normalise *anything* the driver gives us – Buffer (WKB),
      *       hex, EWKT, WKT – into canonical EWKT for the UI layer.
      * -------------------------------------------------------------- */
@@ -91,7 +96,7 @@ function makeType(cfg) {
       }
     },
 
-    /* Raw DB expression: always force EWKT so we never get untyped WKB */
+    // Always fetch EWKT so we never get raw WKB from Postgres.
     readFromDB: (v) => `ST_AsEWKT(${v})`,
   });
 
