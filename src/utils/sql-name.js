@@ -1,75 +1,53 @@
 /**
  * sql-name.js
- * Utility for manufacturing the `sql_name` property that Saltcorn expects on
- * a custom Type.  The result is both *callable* and *string‑duck‑typed*, so it
- * works transparently everywhere Saltcorn treats it as a plain string (e.g.
- * code that does `sql_name[0]`, `toLowerCase()` or string concatenation).
+ * Utility for manufacturing the SQL‑type generator **and** providing the
+ * plain‑string `sql_name` Saltcorn needs at runtime.
  *
- * Author:       Troy Kelly <troy@team.production.city>
- * First‑created: 2024‑04‑17
- * This revision: 2025‑04‑19 – Added character index properties to fully mimic
- *                             string behaviour (fixes “read property '0'” bug).
- * Licence:      CC0‑1.0  (see LICENCE)
+ * Author:  Troy Kelly  <troy@team.production.city>
+ * Licence: CC0‑1.0
  */
 
 'use strict';
 
-/* eslint-disable jsdoc/require-jsdoc */
-
 /**
- * Build a `sql_name` generator that also quacks like a string.
+ * Build both:
+ *   • a callable generator (`sql_name_fn`) returning the full
+ *     `geometry(Point,4326)` string for a given attribute set, and
+ *   • the canonical lower‑case base string (`sql_name`) Saltcorn
+ *     requires for catalogue look‑ups (must be a real string, **not**
+ *     a function).
  *
- * @param {'GEOMETRY'|'GEOGRAPHY'} base   The base PostGIS type.
- * @param {string}                 subtype Default subtype when none supplied
- * @returns {(attrs?: import('../types').PostGISTypeAttrs) => string} Callable
- *          returning the SQL type string.
+ * @param {'GEOMETRY'|'GEOGRAPHY'} base
+ * @param {string}                 defaultSubtype
+ * @returns {{ sql_name: string,
+ *             sql_name_fn:
+ *               (attrs?: import('../types').PostGISTypeAttrs) => string }}
  */
-function sqlNameFactory(base, subtype) {
+function buildSqlName(base, defaultSubtype) {
+  const canonical = base.toLowerCase();
+
   /**
+   * Callable helper – returns the full qualified SQL type string.
+   *
    * @param {import('../types').PostGISTypeAttrs=} attrs
    * @returns {string}
    */
-  function sqlName(attrs = {}) {
-    const { DEFAULT_SRID } = require('../constants'); // lazy to avoid cycle
+  function sqlNameFn(attrs = {}) {
+    // Lazy import to avoid a circular‑dependency on constants.
+    const { DEFAULT_SRID } = require('../constants');
+
     const srid = attrs.srid ?? DEFAULT_SRID;
     const dim  = attrs.dim ? String(attrs.dim).toUpperCase() : '';
-    const sub  = ((attrs.subtype ?? subtype) + dim).toUpperCase();
+    const sub  = ((attrs.subtype ?? defaultSubtype) + dim).toUpperCase();
 
-    const baseLower = base.toLowerCase();
-    if (sub) return `${baseLower}(${sub},${srid})`;
+    if (sub) return `${canonical}(${sub},${srid})`;
     if (srid !== undefined && srid !== null) {
-      return `${baseLower}(Geometry,${srid})`;
+      return `${canonical}(Geometry,${srid})`;
     }
-    return baseLower;
+    return canonical;
   }
 
-  /* ------------------------------------------------------------------
-   * “Duck‑type” the function so it behaves 100 % like the canonical
-   * lower‑case string in every common JS operation.
-   * ----------------------------------------------------------------- */
-  const canonical = base.toLowerCase();
-
-  /* Basic string behaviours */
-  Object.defineProperties(sqlName, {
-    toLowerCase: { value: () => canonical },
-    toUpperCase: { value: () => canonical.toUpperCase() },
-    toString:    { value: () => canonical },
-    valueOf:     { value: () => canonical },
-    [Symbol.toPrimitive]: { value: () => canonical },
-  });
-
-  /* Expose character index properties (fixes `sql_name[0]` look‑ups) */
-  for (let i = 0; i < canonical.length; i += 1) {
-    // Using defineProperty keeps the function non‑enumerable like real strings.
-    Object.defineProperty(sqlName, String(i), {
-      value: canonical[i],
-      writable: false,
-      enumerable: false,
-      configurable: false,
-    });
-  }
-
-  return sqlName;
+  return { sql_name: canonical, sql_name_fn: sqlNameFn };
 }
 
-module.exports = { sqlNameFactory };
+module.exports = { buildSqlName };
