@@ -1,24 +1,22 @@
 /**
  * map-edit-view.js
  * -----------------------------------------------------------------------------
- * Field‑view “edit” – interactive Leaflet editor for every PostGIS column type.
+ * Field‑view “edit” – interactive Leaflet editor that **guarantees** the WKT
+ * sent back to Saltcorn matches the column’s SQL type:
+ *   • geometrycollection → GEOMETRYCOLLECTION( … )
+ *   • multipolygon       → MULTIPOLYGON( … )
+ *   • multilinestring    → MULTILINESTRING( … )
+ *   • multipoint         → MULTIPOINT( … )
+ *   • everything else    → single geometry or GEOMETRYCOLLECTION
  *
- * The serialiser now guarantees the generated WKT **always matches the column’s
- * declared SQL type**:
- *   • geometrycollection   → GEOMETRYCOLLECTION( … )
- *   • multipolygon         → MULTIPOLYGON( … )
- *   • multilinestring      → MULTILINESTRING( … )
- *   • multipoint           → MULTIPOINT( … )
- *   • all other types      → single geometry or GEOMETRYCOLLECTION as needed
- *
- * Author:   Troy Kelly <troy@team.production.city>
- * Updated:  2025‑04‑20 – type‑aware WKT serialiser
+ * Author:   Troy Kelly  <troy@team.production.city>
+ * Updated:  2025‑04‑20
  * Licence:  CC0‑1.0
  */
 
 'use strict';
 
-/* ────────────────────────────────────────────────────────────────────────── */
+/* ─────────────────────────  Imports / constants  ─────────────────────────── */
 
 const { DEFAULT_CENTER, LEAFLET } = require('../constants');
 
@@ -29,10 +27,10 @@ const DRAW_CSS =
 const WELLKNOWN_JS =
   'https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
 
-/* ───────────────────────── Helper: unpack Saltcorn args ─────────────────── */
+/* ───────────────────────────  Utility helpers  ───────────────────────────── */
 
 /**
- * Normalises Saltcorn’s two field‑view call signatures:
+ * Normalises Saltcorn’s two call signatures:
  *   • (fieldName:string, value, attrs?, classes?)
  *   • (fieldObj:Field,   value, attrs?, classes?)
  *
@@ -40,20 +38,20 @@ const WELLKNOWN_JS =
  * @returns {{name:string,value:string,attrs?:object,cls?:string}}
  */
 function unpackArgs(args) {
-  /** @type {string}   */ let name  = '';
-  /** @type {string}   */ let value = '';
-  /** @type {object}   */ let attrs;
-  /** @type {string}   */ let cls;
+  /** @type {string} */ let name  = '';
+  /** @type {string} */ let value = '';
+  /** @type {object} */ let attrs;
+  /** @type {string} */ let cls;
 
   if (args[0] && typeof args[0] === 'object' && 'name' in args[0]) {
-    // Field object form
-    // @ts-ignore – runtime shape check
+    // Field‑object form
+    // @ts-ignore runtime shape test
     name  = args[0].name;
     value = args[1] ?? '';
     attrs = args[2];
     cls   = args[3];
   } else {
-    // Primitive (string) form
+    // Primitive form
     name  = args[0] ?? '';
     value = args[1] ?? '';
     attrs = args[2];
@@ -62,13 +60,12 @@ function unpackArgs(args) {
   return { name, value: String(value ?? ''), attrs, cls };
 }
 
-/* ───────────────────────────── Main factory ─────────────────────────────── */
+/* ──────────────────────────────  Factory  ───────────────────────────────── */
 
 /**
- * Returns the Leaflet edit field‑view for a particular PostGIS *Saltcorn*
- * type name (e.g. “polygon”, “geometrycollection”, “multipolygon”…).
+ * Builds the Leaflet edit view for any PostGIS type.
  *
- * @param {string} expectedType  Lower‑case Saltcorn type name.
+ * @param {string} expectedType  Saltcorn type name in lower case.
  * @returns {import('@saltcorn/types').FieldView}
  */
 function mapEditView(expectedType = '') {
@@ -76,26 +73,24 @@ function mapEditView(expectedType = '') {
     name: 'edit',
     isEdit: true,
     description:
-      'Interactive Leaflet editor producing WKT that matches the column type.',
+      'Interactive Leaflet editor whose WKT output matches the column type.',
     /* eslint-disable max-lines-per-function */
-    run(/* …dynamic… */) {
-      /* ───── 1. Extract call parameters ─────────────────────────── */
+    run(/* dynamic */) {
+      /* ───── 1. Args & IDs ──────────────────────────────────────── */
       const { name: fieldName, value: current, attrs = {}, cls = '' } =
         unpackArgs(arguments);
 
       const mapId   = `map_${Math.random().toString(36).slice(2)}`;
       const inputId = `inp_${mapId}`;
 
-      /* ───── 2. 3‑D helper (single global Z value) ───────────────── */
+      /* ───── 2. Z‑dimension helper input ───────────────────────── */
       const dimAttr  = String(attrs?.dim ?? '').toUpperCase();
-      const hasZAttr = dimAttr.includes('Z');
-      const hasZVal  = /Z[^A-Za-z]*\(/i.test(current);
-      const wantZ    = hasZAttr || hasZVal;
+      const wantZ    = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(current);
       const zId      = wantZ ? `z_${mapId}` : null;
 
       const { lat, lng, zoom } = DEFAULT_CENTER;
 
-      /* ───── 3. HTML ‑ wrapper & hidden input ────────────────────── */
+      /* ───── 3. HTML payload (map + hidden input) ───────────────── */
       return `
 <div class="${cls}">
   <div id="${mapId}" class="border rounded" style="height:300px;"></div>
@@ -113,96 +108,95 @@ function mapEditView(expectedType = '') {
 <script>
 ${String(function scParsePoint(wkt) {
   if (typeof wkt !== 'string') return null;
-  var m = wkt.replace(/^SRID=\\d+;/i, '')
-             .match(/^POINT[^()]*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)\\s*/i);
-  return m ? [Number(m[2]), Number(m[1])] : null; // [lat, lng]
+  wkt = wkt.replace(/^SRID=.*?;/i, '');
+  const m = wkt.match(/^POINT\\s*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)\\s*/i);
+  return m ? [Number(m[2]), Number(m[1])] : null;
 })}
 
-/* ───────── dynamic dependency loader ───────── */
+/* ─────────────── dependency loader ─────────────── */
 (function(){
-  function hasCss(h){return !!document.querySelector('link[href="'+h+'"]');}
-  function hasJs(s){return !!(document._loadedScripts&&document._loadedScripts[s]);}
-  function getCss(h){return new Promise(r=>{if(hasCss(h))return r();
-    var l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;document.head.appendChild(l);});}
-  function getJs(s){return new Promise(r=>{if(hasJs(s))return r();
-    var sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){
-      document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};document.head.appendChild(sc);});}
+  function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
+  function haveJs(s){ return !!(document._loadedScripts&&document._loadedScripts[s]);}
+  function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
+    const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;document.head.appendChild(l);});}
+  function loadJs(s){ return new Promise(r=>{if(haveJs(s))return r();
+    const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){
+      document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
+    document.head.appendChild(sc);});}
 
   (async function(){
-    await getCss(${JSON.stringify(LEAFLET.css)});
-    await getCss(${JSON.stringify(DRAW_CSS)});
-    await getJs(${JSON.stringify(LEAFLET.js)});
-    await getJs(${JSON.stringify(DRAW_JS)});
-    await getJs(${JSON.stringify(WELLKNOWN_JS)});
+    await loadCss(${JSON.stringify(LEAFLET.css)});
+    await loadCss(${JSON.stringify(DRAW_CSS)});
+    await loadJs(${JSON.stringify(LEAFLET.js)});
+    await loadJs(${JSON.stringify(DRAW_JS)});
+    await loadJs(${JSON.stringify(WELLKNOWN_JS)});
     init();
   })();
 
-/* ─────────────── initialiser ───────────────── */
+/* ────────────────  main init  ──────────────────── */
   function init(){
-    var mapEl  = document.getElementById(${JSON.stringify(mapId)});
-    var hidden = document.getElementById(${JSON.stringify(inputId)});
+    const mapEl  = document.getElementById(${JSON.stringify(mapId)});
+    const hidden = document.getElementById(${JSON.stringify(inputId)});
     if(!mapEl||!hidden||!window.L||!window.L.Draw) return;
 
-    var map = L.map(mapEl).setView([${lat},${lng}],${zoom});
+    const map = L.map(mapEl).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                {attribution:'&copy; OpenStreetMap'}).addTo(map);
+                {attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+    const fg  = new L.FeatureGroup().addTo(map);
 
-    var fg = new L.FeatureGroup().addTo(map);
-
-    /* 3‑A. Load existing WKT/EWKT */
+    /* ---- Load existing WKT -------------------------------------- */
     try{
-      var init = hidden.value.trim();
+      const init = hidden.value.trim();
       if(init){
-        var gj  = window.wellknown.parse(init.replace(/^SRID=\\d+;/i,''));
-        var lyr = L.geoJSON(gj).addTo(fg);
+        const gj = window.wellknown.parse(init.replace(/^SRID=\\d+;/i,''));
+        const lyr = L.geoJSON(gj).addTo(fg);
         map.fitBounds(lyr.getBounds(),{maxZoom:14});
       }
-    }catch(e){/* swollow parse errors */ }
+    }catch{}
 
-    /* 3‑B. Draw toolbar */
+    /* ---- Draw toolbar ------------------------------------------- */
     map.addControl(new L.Control.Draw({
-      edit: { featureGroup: fg },
-      draw: { polygon:true, polyline:true, rectangle:false, circle:false,
-              marker:true, circlemarker:false }
+      edit:{featureGroup:fg},
+      draw:{polygon:true,polyline:true,rectangle:false,circle:false,marker:true,circlemarker:false}
     }));
 
-    /* 3‑C. Serialiser that respects the column type */
-    var EXPECT = ${JSON.stringify(expectedType.toLowerCase())};
+    /* ---- Serialiser – type aware -------------------------------- */
+    const EXPECT = ${JSON.stringify(expectedType)};
 
-    function buildMulti(type){
-      var coords = fg.toGeoJSON().features.map(function(f){ return f.geometry.coordinates; });
-      var gType  = { multipolygon:'MultiPolygon',
-                     multilinestring:'MultiLineString',
-                     multipoint:'MultiPoint' }[type];
-      return window.wellknown.stringify({ type:gType, coordinates:coords });
+    function buildMulti(t){
+      const coords = fg.toGeoJSON().features.map(f=>f.geometry.coordinates);
+      const type   = { multipoint:'MultiPoint',
+                       multilinestring:'MultiLineString',
+                       multipolygon:'MultiPolygon' }[t];
+      return window.wellknown.stringify({ type, coordinates: coords });
     }
 
     function toWkt(){
-      var gj = fg.toGeoJSON();
+      const gj = fg.toGeoJSON();
       if(!gj.features.length) return '';
 
       if(EXPECT==='geometrycollection'){
         return 'GEOMETRYCOLLECTION('+
-          gj.features.map(function(f){return window.wellknown.stringify(f.geometry);}).join(',')+
+          gj.features.map(f=>window.wellknown.stringify(f.geometry)).join(',')+
           ')';
       }
-      if(EXPECT==='multipolygon' || EXPECT==='multilinestring' || EXPECT==='multipoint')
+
+      if(EXPECT==='multipolygon'||EXPECT==='multilinestring'||EXPECT==='multipoint')
         return buildMulti(EXPECT);
 
       if(gj.features.length===1)
         return window.wellknown.stringify(gj.features[0].geometry);
 
-      // Mixed types → geometrycollection
       return 'GEOMETRYCOLLECTION('+
-        gj.features.map(function(f){return window.wellknown.stringify(f.geometry);}).join(',')+
+        gj.features.map(f=>window.wellknown.stringify(f.geometry)).join(',')+
         ')';
     }
 
     function sync(){ hidden.value = toWkt(); }
 
-    map.on(L.Draw.Event.CREATED, function(e){ fg.addLayer(e.layer); sync(); });
-    map.on(L.Draw.Event.EDITED,  sync);
-    map.on(L.Draw.Event.DELETED, sync);
+    map.on(L.Draw.Event.CREATED,e=>{fg.addLayer(e.layer);sync();});
+    map.on(L.Draw.Event.EDITED, sync);
+    map.on(L.Draw.Event.DELETED,sync);
   }
 })();
 </script>`;

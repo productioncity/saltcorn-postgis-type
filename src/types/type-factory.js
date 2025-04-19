@@ -1,14 +1,11 @@
 /**
  * type-factory.js
  * -----------------------------------------------------------------------------
- * Generates Saltcorn `Type` objects for every PostGIS subtype.
- *
- * The edit field‑view now receives the column’s type name so the client‑side
- * serialiser can output WKT that exactly matches the SQL column definition.
+ * Generates Saltcorn `Type` definitions for every PostGIS subtype.
  *
  * Author:  Troy Kelly <troy@team.production.city>
  * Updated: 2025‑04‑20 – pass type name to mapEditView()
- * Licence: CC0‑1.0
+ * Licence:  CC0‑1.0
  */
 
 'use strict';
@@ -26,7 +23,7 @@ const { rawView }     = require('../leaflet/raw-view');
 
 /**
  * @param {object} cfg
- * @param {string} cfg.name
+ * @param {string} cfg.name               Saltcorn type name
  * @param {'GEOMETRY'|'GEOGRAPHY'} cfg.base
  * @param {string} cfg.subtype
  * @param {boolean} cfg.allowDim
@@ -59,11 +56,11 @@ function makeType(cfg) {
     });
   }
 
-  /* ───── Field‑views (edit gets the explicit type name) ─────────── */
-  const editFV      = mapEditView(name.toLowerCase());
-  const mapPreview  = { ...showView(), name: 'map', isEdit: true };
+  /* ---- Field‑views ---- */
+  const editFV     = mapEditView(name.toLowerCase());
+  const mapPreview = { ...showView(), name: 'map', isEdit: true };
 
-  /* ───── Construct final Saltcorn Type object ───────────────────── */
+  /* ---- Final Saltcorn type ---- */
   return Object.freeze({
     name,
     sql_name: sqlNameFactory(base, subtype),
@@ -77,7 +74,6 @@ function makeType(cfg) {
       show: showView(),
     },
 
-    /* ---- READ normalisation (Buffer, hex, EWKT → EWKT) ----------- */
     read: (v) => {
       if (v === null || v === undefined) return undefined;
       try {
@@ -88,7 +84,6 @@ function makeType(cfg) {
       }
     },
 
-    /* ---- Force database to return EWKT not raw WKB ---------------- */
     readFromDB: (v) => `ST_AsEWKT(${v})`,
   });
 }
