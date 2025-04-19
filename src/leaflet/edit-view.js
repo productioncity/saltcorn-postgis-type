@@ -1,20 +1,16 @@
 /**
- * edit-view.js
+ * edit‑view.js
  * ---------------------------------------------------------------------------
- * Leaflet‑based interactive “edit” field‑view for all PostGIS geometry types.
+ * Leaflet‑based interactive “edit” field‑view for all PostGIS geometries.
  *
- * Features
+ * New in this revision
  * ────────────────────────────────────────────────────────────────────────────
- * • Supports creating new records (draw on map).
- * • Editing/deleting existing geometries via leaflet.draw UI.
- * • Hidden <input> persists the WKT back to Saltcorn on form submit.
- * • Falls back to raw text editing for dimensions Leaflet cannot capture
- *   (Z/M/ZM) – users can refine the WKT manually post‑draw.
- *
- * External, browser‑side dependencies are loaded lazily:
- *   – Leaflet assets (served by the plug‑in via constants.LEAFLET).
- *   – leaflet.draw 1.0.4 (CDN).
- *   – wellknown 0.5.0 (CDN) for WKT⇆GeoJSON conversion.
+ * • Supports *multiple* drawn layers. Those layers are serialised to:
+ *     – MultiPoint / MultiLineString / MultiPolygon when homogeneous.
+ *     – GeometryCollection when mixed.
+ * • Round‑trips existing MULTI* and GEOMETRYCOLLECTION WKTs.
+ * • Existing single‑geometry behaviour is unchanged – users can still save
+ *   just one shape if they wish.
  *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -47,140 +43,180 @@ function escapeHtml(value) {
 }
 
 /**
- * Produces a Saltcorn field‑view for interactive geometry editing.
+ * Build a Saltcorn field‑view for interactive geometry editing.
  *
- * @param {string} typeName – The logical Saltcorn type (point, polygon …)
+ * @param {string} _typeName – The logical Saltcorn type (unused but kept for
+ *                             future refinements).
  * @returns {import('@saltcorn/types').FieldView}
  */
-function leafletEditView(typeName) {
+function leafletEditView(_typeName) {
   return {
     isEdit: true,
     /**
-     * @param {string} name                – Field name.
-     * @param {string|undefined|null} value – Current WKT/EWKT value.
-     * @returns {string} HTML fragment
+     * @param {string} name       – Field name.
+     * @param {string|null=} val  – Current WKT/EWKT value.
+     * @returns {string}          – HTML fragment.
      */
-    run(name, value) {
-      const safeVal = escapeHtml(value ?? '');
+    run(name, val) {
+      const safeVal = escapeHtml(val ?? '');
       const mapId = `sc-edit-map-${name}-${Math.random()
         .toString(36)
         .slice(2, 8)}`;
 
       return `
 ${LEAFLET.header()}
-<!-- Load wellknown.js when not already present -->
+<!-- Load browser‑side deps (wellknown + leaflet.draw) if absent -->
 <script>
 if(!window.wellknown){
   const s=document.createElement('script');
   s.src='https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
   document.head.appendChild(s);
 }
+const ensureDraw = new Promise((res)=>{
+  if(window.L && window.L.Draw){ res(); return; }
+  const css=document.createElement('link');
+  css.rel='stylesheet';
+  css.href='https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css';
+  document.head.appendChild(css);
+  const js=document.createElement('script');
+  js.src='https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
+  js.onload=()=>res();
+  document.head.appendChild(js);
+});
 </script>
 
-<!-- Hidden input that Saltcorn actually reads/writes -->
+<!-- Hidden input Saltcorn reads -->
 <input type="hidden" id="${mapId}-wkt" name="${name}" value="${safeVal}">
 
-<!-- Raw WKT textarea (toggleable) for power‑users -->
+<!-- Optional raw WKT editor -->
 <div class="mb-2">
-  <button type="button" class="btn btn-sm btn-outline-secondary"
-          data-bs-toggle="collapse" data-bs-target="#${mapId}-raw">
-    Toggle raw WKT editor
+  <button class="btn btn-sm btn-outline-secondary"
+          type="button" data-bs-toggle="collapse"
+          data-bs-target="#${mapId}-raw">
+    Toggle raw WKT editor
   </button>
 </div>
 <div id="${mapId}-raw" class="collapse mb-2">
-  <textarea class="form-control" rows="3"
-            id="${mapId}-rawtxt">${safeVal}</textarea>
+  <textarea id="${mapId}-rawtxt" class="form-control" rows="3">${safeVal}</textarea>
 </div>
 
-<!-- Map container -->
+<!-- Map -->
 <div id="${mapId}" style="height:400px"></div>
 
 <script>
 (function(){
   const init=()=>{
-    if(!window.L){ setTimeout(init,50); return; }
-
-    /* Lazy‑load leaflet.draw only once */
-    const loadDraw=(cb)=>{
-      if(window.L && window.L.Draw){ cb(); return; }
-      const css=document.createElement('link');
-      css.rel='stylesheet';
-      css.href='https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css';
-      document.head.appendChild(css);
-
-      const js=document.createElement('script');
-      js.src='https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
-      js.onload=cb;
-      document.head.appendChild(js);
-    };
-
-    loadDraw(()=>{
-      const map=L.map(${JSON.stringify(mapId)}).setView([0,0],2);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-        attribution:'&copy; OpenStreetMap contributors',
-      }).addTo(map);
-
-      const featureGroup=new L.FeatureGroup().addTo(map);
-
-      /* Populate from existing WKT */
-      const initWkt=document.getElementById('${mapId}-wkt').value;
-      if(initWkt && window.wellknown){
-        try{
-          const g=window.wellknown.parse(initWkt);
-          if(g){
-            const lyr=L.geoJSON(g);
-            lyr.eachLayer((l)=>featureGroup.addLayer(l));
-            map.fitBounds(featureGroup.getBounds());
-          }
-        }catch(e){}
-      }
-
-      /* Draw control */
-      const drawCtl=new L.Control.Draw({
-        edit:{ featureGroup, remove:true },
-        draw:{
-          polygon: true,
-          polyline:true,
-          marker:  true,
-          rectangle:true,
-          circle:  false,
-          circlemarker:false,
-        }
-      });
-      map.addControl(drawCtl);
-
-      const wktInput=document.getElementById('${mapId}-wkt');
-      const rawTxt=document.getElementById('${mapId}-rawtxt');
-
-      const syncToInput=()=>{
-        const geo=featureGroup.toGeoJSON();
-        if(geo.features && geo.features.length){
-          const wkt=window.wellknown.stringify(geo.features[0].geometry);
-          wktInput.value=wkt;
-          rawTxt.value=wkt;
-        }else{
-          wktInput.value='';
-          rawTxt.value='';
-        }
-      };
-
-      map.on(L.Draw.Event.CREATED,(e)=>{
-        featureGroup.clearLayers();
-        featureGroup.addLayer(e.layer);
-        syncToInput();
-      });
-      map.on(L.Draw.Event.EDITED, syncToInput);
-      map.on(L.Draw.Event.DELETED, syncToInput);
-
-      /* Keep hidden and textarea in sync */
-      rawTxt.addEventListener('input',()=>{
-        wktInput.value=rawTxt.value;
-      });
-    });
+    if(!window.L || !window.wellknown){ setTimeout(init,50); return; }
+    ensureDraw.then(setupEditor);
   };
 
+  function setupEditor(){
+    const map=L.map(${JSON.stringify(mapId)}).setView([0,0],2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      attribution:'&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const featureGroup=new L.FeatureGroup().addTo(map);
+
+    /* Populate from existing WKT (may be single, MULTI* or GEOMETRYCOLLECTION) */
+    const initial=document.getElementById('${mapId}-wkt').value;
+    if(initial){
+      try{
+        const g=wellknown.parse(initial);
+        if(g){
+          const lyr=L.geoJSON(g);
+          lyr.eachLayer(l=>featureGroup.addLayer(l));
+          if(featureGroup.getLayers().length){
+            map.fitBounds(featureGroup.getBounds(),{maxZoom:16});
+          }
+        }
+      }catch(e){}
+    }
+
+    /* Draw toolbar */
+    const drawCtl=new L.Control.Draw({
+      edit:{ featureGroup, remove:true },
+      draw:{
+        polygon: true,
+        polyline:true,
+        marker:  true,
+        rectangle:true,
+        circle:  false,
+        circlemarker:false,
+      }
+    });
+    map.addControl(drawCtl);
+
+    const wktInput=document.getElementById('${mapId}-wkt');
+    const rawTxt  =document.getElementById('${mapId}-rawtxt');
+
+    /**
+     * Serialise *all* layers to WKT.
+     *   ‣ homogeneous → Multi*      (MultiPoint, MultiLineString, MultiPolygon)  
+     *   ‣ mixed       → GeometryCollection
+     */
+    const syncToInput=()=>{
+      const fc=featureGroup.toGeoJSON();
+      if(!fc.features.length){
+        wktInput.value=''; rawTxt.value=''; return;
+      }
+
+      const types=new Set(fc.features.map(f=>f.geometry.type));
+      let geom;
+
+      if(types.size===1){
+        const t=types.values().next().value;
+        switch(t){
+          case 'Point':
+            geom=fc.features.length===1
+              ? fc.features[0].geometry
+              : {type:'MultiPoint',
+                 coordinates:fc.features.map(f=>f.geometry.coordinates)};
+            break;
+          case 'LineString':
+            geom=fc.features.length===1
+              ? fc.features[0].geometry
+              : {type:'MultiLineString',
+                 coordinates:fc.features.map(f=>f.geometry.coordinates)};
+            break;
+          case 'Polygon':
+            geom=fc.features.length===1
+              ? fc.features[0].geometry
+              : {type:'MultiPolygon',
+                 coordinates:fc.features.map(f=>f.geometry.coordinates)};
+            break;
+          default:
+            geom={type:'GeometryCollection',
+                  geometries:fc.features.map(f=>f.geometry)};
+            break;
+        }
+      }else{
+        geom={type:'GeometryCollection',
+              geometries:fc.features.map(f=>f.geometry)};
+      }
+
+      try{
+        const wkt=wellknown.stringify(geom);
+        wktInput.value=wkt;
+        rawTxt.value=wkt;
+      }catch(e){
+        /* stringify failed – keep old value to avoid data loss */
+      }
+    };
+
+    map.on(L.Draw.Event.CREATED,(e)=>{
+      featureGroup.addLayer(e.layer);
+      syncToInput();
+    });
+    map.on(L.Draw.Event.EDITED, syncToInput);
+    map.on(L.Draw.Event.DELETED, syncToInput);
+
+    /* Keep textarea → hidden‑input in sync (manual edits) */
+    rawTxt.addEventListener('input',()=>{ wktInput.value=rawTxt.value; });
+  }
+
   if(document.readyState!=='loading') init();
-  else document.addEventListener('DOMContentLoaded', init);
+  else document.addEventListener('DOMContentLoaded',init);
 })();
 </script>`;
     },

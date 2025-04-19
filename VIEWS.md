@@ -1,70 +1,44 @@
-# PostGIS “Edit” Views – Developer Guide
+# PostGIS Field‑views – Developer Guide (interactive + raw)
 
-The plug‑in ships **two complementary _edit_ field‑views** that you can mix‑and‑match per‑field when building Saltcorn forms:
+The plug‑in ships **two complementary _edit_ field‑views** that work with **all
+geometry types**, including `GEOMETRYCOLLECTION` and every `MULTI*` variant.
 
-| View name | Purpose | Best for |
-|-----------|---------|----------|
-| `edit` (default) | Interactive Leaflet map with full _draw / edit / delete_ controls powered by **leaflet.draw**. Automatically converts the geometry to WKT for storage. | Everyday data entry – create, move, delete points, lines or polygons with the mouse / touch. |
-| `raw` | Plain `<textarea>` that accepts **any** WKT / EWKT text. Use this to enter extra dimensions (*Z*, *M*, *ZM*) or exotic sub‑types that Leaflet cannot draw. | Power‑users & bulk copy/paste operations. |
-
-Both views are available for **every PostGIS type** exposed by the plug‑in – simply choose the desired view in the _Field‑view_ dropdown when creating or editing a Saltcorn view.
-
----
-
-## 1 – Interactive map editor (`edit`)
-
-* **Create** geometries  
-  Click the draw tool (marker, line, polygon or rectangle) then click on the map.
-
-* **Edit / move**  
-  Use the edit tool (pencil) to drag vertices or the entire shape.
-
-* **Delete**  
-  Select the dust‑bin icon and click the geometry you want to remove.
-
-* **Multiple geometries**  
-  The control deliberately allows **only one** geometry per field. Drawing a new
-  shape replaces the previous one – mirroring the one‑column‑per‑field model in
-  Saltcorn.
-
-* **SRID & dimensions**  
-  The map always operates in **WGS‑84 (EPSG 4326)** and stores standard WKT.
-  If your field is defined with a different SRID or dimensionality you can
-  fine‑tune the result afterwards in the “raw” editor or a SQL transform.
+| View name | Purpose | Key features |
+|-----------|---------|--------------|
+| `edit` (default) | Interactive Leaflet map with full **draw / edit / delete** controls. Captures **multiple shapes** and automatically returns the correct WKT:<br>• MultiPoint / MultiLineString / MultiPolygon for homogeneous layers.<br>• GeometryCollection when layers are mixed.<br>• Falls back to raw text for exotic sub‑types (CurvePolygon, etc.). | • Add, move, delete any number of shapes.<br>• Existing WKT (single, MULTI*, GEOMETRYCOLLECTION) is decomposed and shown for editing.<br>• SRID always 4326 – re‑project later if required. |
+| `raw` | Plain `<textarea>` accepting any WKT/EWKT verbatim. Ideal for power‑users who need to add **Z / M / ZM** coordinates or unsupported sub‑types. Can be toggled on/off while using the map editor. | • Zero client‑side validation – PostGIS decides validity.<br>• Synced in real‑time with the interactive map. |
 
 ---
 
-## 2 – Raw WKT editor (`raw`)
+## Using the interactive editor (`edit`)
 
-A simple text box – whatever you type is what gets persisted. Handy for:
-
-* Adding **Z / M / ZM** ordinates:  
-  `POINT ZM (153.021 -27.470 25.4 1234)`
-* Specifying **complex sub‑types**:  
-  `CIRCULARSTRING(…​)`
-* Bulk copy/paste from external tools.
-
-You can reveal the raw editor while using the map view by clicking **“Toggle
-raw WKT editor”**. Both widgets stay synchronised – edits in one instantly
-update the other.
+1. **Draw shapes** using the toolbar (marker, polyline, polygon, rectangle).  
+2. **Edit or move** them with the pencil icon.  
+3. **Delete** with the dust‑bin icon.  
+4. All layers drawn belong to the *same field*. On save they are serialised to:
+   * Multi* geometry when all layers share the same type; **or**  
+   * GeometryCollection when types differ.
+5. **Toggle “Raw WKT editor”** for fine‑tuning or bulk pasting.
 
 ---
 
-## 3 – Frequently asked questions
+## Frequently asked questions
 
-**Q 1 – How do I switch between the editors?**  
-When configuring a Saltcorn _view_, open the _Field‑view_ settings for your
-geometry field and select either `edit` or `raw` from the list.
+**Q 1 – Can I store multiple polygons / points / lines in the one field?**  
+Absolutely. Draw as many shapes as you like; the plug‑in converts them to
+`MultiPolygon`, `MultiPoint`, `MultiLineString` or `GeometryCollection`
+depending on what you drew.
 
-**Q 2 – Can I store multiple geometries in one field?**  
-No. PostGIS columns hold a single geometry value. To model a collection,
-create a separate table with a foreign‑key.
+**Q 2 – Leaflet doesn’t handle 3‑D (Z/M) – what about my elevation data?**  
+Draw the base geometry, open the **raw** editor and append your extra ordinates
+before saving, e.g.:
 
-**Q 3 – Will the plug‑in re‑project coordinates automatically?**  
-The map editor always emits `SRID=4326;…` or plain‐SRID‐less WKT. If your
-column SRID differs use a database trigger (`ST_Transform`) or handle it in
-application logic.
+POLYGON Z ((151.2 -33.86 12, …))
+
+**Q 3 – The field SRID isn’t 4326 – do I need to re‑project?**  
+The editor works in WGS‑84 (EPSG 4326). Use a trigger (`ST_Transform`) or
+application logic to convert on insert/update if your column SRID differs.
 
 ---
 
-Production City (CC0‑1.0)
+Production City (CC0‑1.0)
