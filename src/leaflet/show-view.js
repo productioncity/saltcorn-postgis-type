@@ -1,14 +1,15 @@
 /**
- * leaflet/show‑view.js
+ * show-view.js
  * ---------------------------------------------------------------------------
- * “Show” field‑view – renders the stored WKT/EWKT/GeoJSON as safe inline text.
+ * Saltcorn “show” field‑view for PostGIS geometries/geographies.
  *
- * The admin had reported an empty element being rendered.  The previous
- * implementation swallowed falsy values and returned an empty string for all
- * inputs.  We now:
- *   • Render a <code>…</code> block whenever a value is present.
- *   • Return an empty string only when the database value is genuinely null or
- *     an empty string.
+ * • Renders the value as EWKT/WKT inside a <code> block (always HTML‑safe).
+ * • If Saltcorn has handed us raw HEXEWKB (the default pg output), we fall
+ *   back to a terse “HEXEWKB(…)” placeholder so the user can at least see
+ *   something intelligible instead of a huge hex blob.
+ * • Because WKT/EWKT already includes Z/M/ZM ordinates, those values will be
+ *   displayed automatically – Leaflet itself does nothing with them, but the
+ *   human reading the record can.
  *
  * Author:  Troy Kelly  <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -17,30 +18,43 @@
 'use strict';
 
 /**
- * Returns a Saltcorn “show” field‑view definition.
+ * @param {unknown} maybeHex
+ * @returns {boolean}
+ */
+function looksLikeHexEwkb(maybeHex) {
+  return (
+    typeof maybeHex === 'string' &&
+    /^[0-9A-Fa-f]*$/.test(maybeHex.trim()) &&
+    maybeHex.length % 2 === 0
+  );
+}
+
+/**
+ * Produces the field‑view object consumed by Saltcorn.
  *
- * @returns {import('@saltcorn/types').FieldView}
+ * @returns {import('@saltcorn/types/base_plugin').FieldView}
  */
 function leafletShow() {
   return {
+    name: 'leaflet-show',
     isEdit: false,
-
     /**
-     * Render callback used by Saltcorn.
-     *
-     * @param {string|undefined|null} v   The cell value.
-     * @returns {string}                  Raw HTML.
+     * @param {string|undefined|null} value
+     * @returns {string} – HTML (already escaped where needed)
      */
-    run(v) {
-      if (v === null || v === undefined || String(v).trim() === '') return '';
+    run(value) {
+      if (value === null || value === undefined) return '';
+      const val = String(value).trim();
 
-      // Minimal HTML‑escaping (sufficient because Saltcorn encodes containers).
-      const escaped = String(v)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+      let display;
+      if (looksLikeHexEwkb(val)) {
+        // Trim the blob so list‑views remain readable.
+        display = `HEXEWKB(${val.slice(0, 16)}…${val.slice(-16)})`;
+      } else {
+        display = val.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
 
-      return `<code class="sc‑pgis‑wkt">${escaped}</code>`;
+      return `<code class="sc-postgis-show text-wrap">${display}</code>`;
     },
   };
 }
