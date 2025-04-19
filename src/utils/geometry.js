@@ -12,8 +12,8 @@
  *
  * Author:       Troy Kelly <troy@team.production.city>
  * First‑created: 2024‑04‑17
- * This revision: 2025‑04‑19d – Geometry‑collection fixes, single‑escape JSON,
- *                              and robust Z‑extraction helper.
+ * This revision: 2025‑04‑20 –  Hex‑WKB aware extractFirstZ() so the edit view
+ *                              correctly pre‑loads altitude values.
  * Licence:      CC0‑1.0  (see LICENCE)
  */
 
@@ -189,20 +189,6 @@ function normaliseGeoJSON(geom) {
   return { type: 'Feature', properties: {}, geometry: geom };
 }
 
-/**
- * Extract the first Z ordinate encountered inside **any** WKT/EWKT string.
- * Falls back to 0 if none present.
- *
- * @param {string} src
- * @returns {number}
- */
-function extractFirstZ(src) {
-  const m = src.match(
-    /[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/,
-  );
-  return m ? Number(m[1]) : 0;
-}
-
 /* ───────────────────────── Public helpers ─────────────────────────── */
 
 /**
@@ -251,11 +237,6 @@ function wktToLonLat(value) {
 /**
  * Convert WKT / EWKT / hex‑WKB / Buffer to *2‑D* GeoJSON.
  *
- * Uses `wkx` for parity with PostGIS (handles 3‑D, measures, collections).
- * Falls back to `wellknown` for very old Node environments where wkx might
- * be unavailable. Regardless of input dimensionality, **output is always
- * 2‑D** to keep downstream mapping libraries happy.
- *
  * @param {unknown} value
  * @returns {Record<string, unknown>|undefined}
  */
@@ -299,6 +280,30 @@ function wktToGeoJSON(value) {
       return undefined;
     }
   }
+}
+
+/**
+ * Extract the first Z ordinate encountered inside **any** geometry string
+ * or hex‑encoded WKB. Falls back to 0 if none present.
+ *
+ * @param {string} src
+ * @returns {number}
+ */
+function extractFirstZ(src) {
+  /* 1.  Ensure we are working with readable WKT/EWKT. */
+  const wkt = toWkt(src) || (typeof src === 'string' ? src : '');
+
+  /* 2.  Strip EWKT SRID so it never interferes with the regex. */
+  const txt = wkt.replace(/^SRID=\d+;/iu, '');
+
+  /* 3.  Regex hunts for “x y z” – captures the z. */
+  const m = txt.match(
+    /[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/,
+  );
+
+  const z = m ? Number(m[1]) : 0;
+  dbg.trace('extractFirstZ()', { src: src?.slice?.(0, 64), z });
+  return z;
 }
 
 /**

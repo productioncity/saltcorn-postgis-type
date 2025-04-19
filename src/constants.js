@@ -15,7 +15,7 @@
  * Should we output debug information.
  * @type {boolean}
  */
-const PLUGIN_DEBUG = true;
+const PLUGIN_DEBUG = false;
 
 
 /**

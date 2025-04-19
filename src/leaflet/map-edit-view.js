@@ -13,7 +13,7 @@
 /* ───────────────────────────── Imports ────────────────────────────── */
 
 const { DEFAULT_CENTER, LEAFLET } = require('../constants');
-const { wktToGeoJSON, extractFirstZ } = require('../utils/geometry');
+const { wktToGeoJSON, extractFirstZ, toWkt } = require('../utils/geometry');
 
 const DRAW_JS =
   'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
@@ -86,6 +86,9 @@ function mapEditView(fallbackType = '') {
       const { name: fieldName, value: current, attrs = {}, cls = '' } =
         unpackArgs(arguments);
 
+      /* Canonical WKT (covers WKT, EWKT, hex‑WKB, Buffer) */
+      const canonical = toWkt(current) || String(current ?? '');
+
       /* Concrete geometry type required by the column */
       const expectType = String(
         (attrs.subtype && `${attrs.subtype}`.toLowerCase()) || fallbackType,
@@ -102,12 +105,13 @@ function mapEditView(fallbackType = '') {
 
       /* Z‑dimension helper */
       const dimAttr = String(attrs?.dim ?? '').toUpperCase();
-      const wantZ = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(current);
-      const initialZ = wantZ ? extractFirstZ(current) : 0;
+      const wantZ =
+        dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(canonical);
+      const initialZ = wantZ ? extractFirstZ(canonical) : 0;
       const zId = wantZ ? `z_${mapId}` : null;
 
       /* Server‑side GeoJSON conversion – handles *everything*. */
-      const initGeoJSON = wktToGeoJSON(current);
+      const initGeoJSON = wktToGeoJSON(canonical);
 
       const { lat, lng, zoom } = DEFAULT_CENTER;
 
@@ -115,16 +119,17 @@ function mapEditView(fallbackType = '') {
       return `
 <div class="${cls}">
   <div id="${mapId}" class="border rounded" style="height:300px;"></div>
-  <input type="hidden" id="${inputId}" name="${fieldName}" value="${current}">
-  ${wantZ
-          ? `<div class="mt-1">
+  <input type="hidden" id="${inputId}" name="${fieldName}" value="${canonical}">
+  ${
+    wantZ
+      ? `<div class="mt-1">
            <label for="${zId}" class="form-label mb-0">Z&nbsp;value</label>
            <input type="number" id="${zId}"
                   class="form-control form-control-sm" step="any"
                   value="${initialZ}">
          </div>`
-          : ''
-        }
+      : ''
+  }
 </div>
 
 <script>
