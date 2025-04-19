@@ -1,44 +1,29 @@
 /**
- * postgis-leaflet-draw-fieldviews.js
- * Extra Leaflet‑Draw field‑views for the Saltcorn PostGIS plug‑in
+ * draw-views.js
+ * Full create / edit / delete Leaflet‑Draw support for Point, Polygon and
+ * arbitrary Geometry fields. Originally in a stand‑alone file; now integrated
+ * into the new modular structure.
  *
- * PURPOSE:
- *   • Adds full **create / edit / delete** support on Leaflet maps for:
- *       – Point                  →  geometry(Point[…])
- *       – Polygon (single)       →  geometry(Polygon[…])
- *       – Arbitrary Geometry     →  geometry(Geometry[…])
- *   • When the column’s `dim` contains `Z` the UI asks once for an altitude
- *     (Z‑value, default = 0) and applies it to all coordinates.
- *   • No conflict with the upstream *leaflet‑map* plug‑in; we load
- *     Leaflet‑Draw assets lazily and only once.
- *
- * AUTHOR:  Troy Kelly <troy@team.production.city>
- * DATE:    18 Apr 2025
- * LICENCE: CC0‑1.0
+ * Author:       Troy Kelly <troy@team.production.city>
+ * First‑created: 2025‑04‑18
+ * Licence:      CC0‑1.0  (see LICENCE)
  */
-
-/* eslint-disable max-len, camelcase */
 
 'use strict';
 
+/* eslint-disable max-len, camelcase */
+
 const { div, script, domReady, text: esc } = require('@saltcorn/markup/tags');
+const { LEAFLET } = require('../constants');
 
 /**
- * Leaflet & Leaflet‑Draw CDN bundles
+ * Leaflet‑Draw CDN assets.
+ *
+ * @type {{css:string,js:string,header:string}}
  */
-const LEAFLET = Object.freeze({
-  css: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
-  js: 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
-  get header() {
-    return (
-      `<link rel="stylesheet" href="${this.css}"/>\n` +
-      `<script defer src="${this.js}"></script>`
-    );
-  },
-});
 const LEAFLET_DRAW = Object.freeze({
   css: 'https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css',
-  js: 'https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js',
+  js:  'https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js',
   get header() {
     return (
       `<link rel="stylesheet" href="${this.css}"/>\n` +
@@ -46,14 +31,22 @@ const LEAFLET_DRAW = Object.freeze({
     );
   },
 });
+
+/** Global Wellknown CDN. */
 const WELLKNOWN_JS =
   '<script defer src="https://unpkg.com/wellknown@0.5.0/wellknown.js"></script>';
 
+/**
+ * Combined CDN header (Leaflet + Draw + Wellknown).
+ * @returns {string}
+ */
 function leafletDrawHeader() {
   return LEAFLET.header + LEAFLET_DRAW.header + WELLKNOWN_JS;
 }
 
 /**
+ * Factory that returns a Leaflet‑Draw field‑view for the given geometry kind.
+ *
  * @param {'point'|'polygon'|'geometry'} kind
  * @returns {import('@saltcorn/types/base_plugin').FieldView}
  */
@@ -63,22 +56,20 @@ function makeDrawFieldView(kind) {
     blockDisplay: true,
     description: `Leaflet‑draw editor for ${kind}`,
 
-    /* Saltcorn runs this to build the HTML */
+    /* Saltcorn calls this to render the HTML. */
     run(nm, value, attrs = {}, cls) {
       const id = `ld${Math.random().toString(36).slice(2)}`;
 
       /* 3‑D altitude helper if dim contains Z */
       const needZ = String(attrs.dim || '').toUpperCase().includes('Z');
       const zId = `z${id}`;
-      const zInput =
-        needZ
-          ? `<div class="mb-1"><label for="${zId}" class="form-label">Z&nbsp;(altitude)</label>` +
-            `<input id="${zId}" type="number" step="any" class="form-control" value="0"/>` +
-            '</div>'
-          : '';
+      const zInput = needZ
+        ? `<div class="mb-1"><label for="${zId}" class="form-label">Z&nbsp;(altitude)</label>` +
+          `<input id="${zId}" type="number" step="any" class="form-control" value="0"/>` +
+          '</div>'
+        : '';
 
       /* ---------- HTML to send back ---------- */
-
       const header = leafletDrawHeader();
 
       const js = `
@@ -160,7 +151,10 @@ function makeDrawFieldView(kind) {
 }
 
 /**
- * Attach leaflet_draw to each supported PostGIS type.
+ * Hooks Leaflet‑Draw field‑views into the supplied PostGIS types array.
+ *
+ * @param {Array<import('@saltcorn/types/base_plugin').Type>} types
+ * @returns {void}
  */
 function registerLeafletDrawFieldViews(types) {
   for (const t of types) {
@@ -179,7 +173,7 @@ function registerLeafletDrawFieldViews(types) {
       case 'multipolygon':
         t.fieldviews.leaflet_draw = makeDrawFieldView('geometry');
         break;
-      /* others (circularstring etc.) deliberately skipped */
+      /* others deliberately skipped */
     }
   }
 }
