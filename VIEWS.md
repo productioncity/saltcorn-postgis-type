@@ -1,44 +1,48 @@
-# PostGIS Field‑views – Developer Guide (interactive + raw)
+# PostGIS Field‑views – Developer Guide
 
-The plug‑in ships **two complementary _edit_ field‑views** that work with **all
-geometry types**, including `GEOMETRYCOLLECTION` and every `MULTI*` variant.
+The plug‑in provides **two edit field‑views** that now include **automatic SRID
+re‑projection** between the Leaflet canvas (EPSG 4326) and your database
+column.
 
-| View name | Purpose | Key features |
-|-----------|---------|--------------|
-| `edit` (default) | Interactive Leaflet map with full **draw / edit / delete** controls. Captures **multiple shapes** and automatically returns the correct WKT:<br>• MultiPoint / MultiLineString / MultiPolygon for homogeneous layers.<br>• GeometryCollection when layers are mixed.<br>• Falls back to raw text for exotic sub‑types (CurvePolygon, etc.). | • Add, move, delete any number of shapes.<br>• Existing WKT (single, MULTI*, GEOMETRYCOLLECTION) is decomposed and shown for editing.<br>• SRID always 4326 – re‑project later if required. |
-| `raw` | Plain `<textarea>` accepting any WKT/EWKT verbatim. Ideal for power‑users who need to add **Z / M / ZM** coordinates or unsupported sub‑types. Can be toggled on/off while using the map editor. | • Zero client‑side validation – PostGIS decides validity.<br>• Synced in real‑time with the interactive map. |
-
----
-
-## Using the interactive editor (`edit`)
-
-1. **Draw shapes** using the toolbar (marker, polyline, polygon, rectangle).  
-2. **Edit or move** them with the pencil icon.  
-3. **Delete** with the dust‑bin icon.  
-4. All layers drawn belong to the *same field*. On save they are serialised to:
-   * Multi* geometry when all layers share the same type; **or**  
-   * GeometryCollection when types differ.
-5. **Toggle “Raw WKT editor”** for fine‑tuning or bulk pasting.
+| View name | Purpose | Highlights |
+|-----------|---------|------------|
+| `edit` (default) | Interactive map with **draw / edit / delete** tools, supports unlimited shapes. | • Saves Multi* or GeometryCollection automatically.<br>• Detects column SRID and re‑projects via proj4js.<br>• Generated EWKT is always `SRID=<srid>;…` so PostGIS accepts it. |
+| `raw` | Plain `<textarea>` for manual WKT/EWKT entry. | • Perfect for Z/M/ZM ordinates or exotic sub‑types.<br>• Real‑time sync with the map editor. |
 
 ---
 
-## Frequently asked questions
+## SRID handling workflow
 
-**Q 1 – Can I store multiple polygons / points / lines in the one field?**  
-Absolutely. Draw as many shapes as you like; the plug‑in converts them to
-`MultiPolygon`, `MultiPoint`, `MultiLineString` or `GeometryCollection`
-depending on what you drew.
+1. **Record load**  
+   * If the column SRID ≠ 4326 the plug‑in fetches the proj4 definition from
+     `epsg.io` (where available) and converts the geometry to WGS‑84 for
+     display.
 
-**Q 2 – Leaflet doesn’t handle 3‑D (Z/M) – what about my elevation data?**  
-Draw the base geometry, open the **raw** editor and append your extra ordinates
-before saving, e.g.:
+2. **User edits / draws**  
+   * All editing occurs in 4326 coordinates.
 
-POLYGON Z ((151.2 -33.86 12, …))
-
-**Q 3 – The field SRID isn’t 4326 – do I need to re‑project?**  
-The editor works in WGS‑84 (EPSG 4326). Use a trigger (`ST_Transform`) or
-application logic to convert on insert/update if your column SRID differs.
+3. **Save**  
+   * On submit the geometry is re‑projected back to the column SRID.  
+   * The resulting WKT is prefixed with `SRID=<srid>;`.  
+   * If a proj4 definition cannot be found the plug‑in falls back to the
+     un‑projected 4326 coordinates so there is no data loss (PostGIS will raise
+     an error if the SRID truly mismatches).
 
 ---
 
-Production City (CC0‑1.0)
+## FAQ (updated)
+
+**Q – Do I need triggers for re‑projection now?**  
+No. The field‑view handles it transparently as long as the SRID exists in the
+proj4 registry (common codes like 3857, 7856, etc.). If the definition is
+missing you can still keep using a database trigger as a fallback.
+
+**Q – What about 3‑D / measured coordinates?**  
+Leaflet is strictly 2‑D. After drawing, open the **raw** editor and append the
+extra ordinates before saving:
+
+LINESTRING ZM (151.21 -33.86 25.4 123)
+
+---
+
+© 2025 Troy Kelly – Production City (CC0‑1.0)
