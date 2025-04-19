@@ -14,6 +14,7 @@ const { sqlNameFactory } = require('../utils/sql-name');
 const { validateAttrs } = require('../utils/geometry');
 const { leafletShow } = require('../leaflet/show-view');
 const { leafletEditView } = require('../leaflet/edit-view');
+const { textEditView } = require('../leaflet/text-edit-view'); // NEW – raw WKT editor
 
 /**
  * Build a Saltcorn Type.
@@ -64,7 +65,8 @@ function makeType(cfg) {
     validate_attributes: validateAttrs,
     fieldviews: {
       show: leafletShow(),
-      edit: leafletEditView(name),
+      edit: leafletEditView(name),     // Interactive map editor (default)
+      raw: textEditView(),             // Backup “raw WKT” editor
     },
     read: (v) => (typeof v === 'string' ? v : undefined),
     /* Saltcorn 1.x expects text‑cast for display in lists */

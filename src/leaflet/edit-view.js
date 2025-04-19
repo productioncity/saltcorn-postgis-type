@@ -1,133 +1,186 @@
 /**
  * edit-view.js
  * ---------------------------------------------------------------------------
- * Saltcorn “edit” field‑view for PostGIS geometries/geographies.
+ * Leaflet‑based interactive “edit” field‑view for all PostGIS geometry types.
  *
- * Author:  Troy Kelly  <troy@team.production.city>
+ * Features
+ * ────────────────────────────────────────────────────────────────────────────
+ * • Supports creating new records (draw on map).
+ * • Editing/deleting existing geometries via leaflet.draw UI.
+ * • Hidden <input> persists the WKT back to Saltcorn on form submit.
+ * • Falls back to raw text editing for dimensions Leaflet cannot capture
+ *   (Z/M/ZM) – users can refine the WKT manually post‑draw.
+ *
+ * External, browser‑side dependencies are loaded lazily:
+ *   – Leaflet assets (served by the plug‑in via constants.LEAFLET).
+ *   – leaflet.draw 1.0.4 (CDN).
+ *   – wellknown 0.5.0 (CDN) for WKT⇆GeoJSON conversion.
+ *
+ * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
  */
 
 'use strict';
 
-const { DEFAULT_CENTER } = require('../constants');
+const { LEAFLET } = require('../constants');
 
 /**
- * Builds the Leaflet‑based edit field‑view.
+ * Escapes critical HTML characters.
  *
- * @param {string} typeName – Lower‑case Saltcorn type name (e.g. “point”).
- * @returns {import('@saltcorn/types/base_plugin').FieldView}
+ * @param {unknown} value
+ * @returns {string}
+ */
+function escapeHtml(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(
+    /[&<>"'`]/g,
+    (c) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+        '`': '&#96;',
+      })[c] || c,
+  );
+}
+
+/**
+ * Produces a Saltcorn field‑view for interactive geometry editing.
+ *
+ * @param {string} typeName – The logical Saltcorn type (point, polygon …)
+ * @returns {import('@saltcorn/types').FieldView}
  */
 function leafletEditView(typeName) {
-  /**
-   * Serialises optional centre overrides into data‑attributes.
-   * @param {{center_lat?:number,center_lng?:number,center_zoom?:number}} cfg
-   * @returns {string}
-   */
-  const centerDataAttrs = ({ center_lat, center_lng, center_zoom }) =>
-    [
-      Number.isFinite(center_lat)  ? `data-center-lat="${center_lat}"`   : '',
-      Number.isFinite(center_lng)  ? `data-center-lng="${center_lng}"`   : '',
-      Number.isFinite(center_zoom) ? `data-center-zoom="${center_zoom}"` : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
-
   return {
-    name: 'leaflet-edit',
     isEdit: true,
-
-    /* Options visible in the Saltcorn field‑view designer */
-    configFields: [
-      { name: 'center_lat',  label: 'Centre latitude',  type: 'Float'  },
-      { name: 'center_lng',  label: 'Centre longitude', type: 'Float'  },
-      {
-        name: 'center_zoom',
-        label: 'Initial zoom',
-        type: 'Integer',
-        attributes: { min: 0, max: 22 },
-      },
-    ],
-
     /**
-     * Renders the control.
-     *
-     * @param {string}                field_name
-     * @param {string|null|undefined} value
-     * @param {object}                attrs        – Field attributes (srid, dim…)
-     * @param {string}                cls
-     * @param {object}                req
-     * @param {boolean}               disabled
-     * @param {object}                viewCfg      – Per‑view config
-     * @returns {string} HTML
+     * @param {string} name                – Field name.
+     * @param {string|undefined|null} value – Current WKT/EWKT value.
+     * @returns {string} HTML fragment
      */
-    run(field_name, value, attrs, cls, req, disabled, viewCfg = {}) {
-      const id  = `sc-postgis-${field_name.replace(/\W/g, '')}`;
-      const val = value ?? '';
-
-      const hasZ = !!attrs?.dim && /Z|ZM/i.test(String(attrs.dim));
-
-      const centre = {
-        lat:  viewCfg.center_lat  ?? DEFAULT_CENTER.lat,
-        lng:  viewCfg.center_lng  ?? DEFAULT_CENTER.lng,
-        zoom: viewCfg.center_zoom ?? DEFAULT_CENTER.zoom,
-      };
-
-      const dataAttrs = centerDataAttrs(centre);
+    run(name, value) {
+      const safeVal = escapeHtml(value ?? '');
+      const mapId = `sc-edit-map-${name}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`;
 
       return `
-<div class="sc-postgis-edit ${cls || ''}" id="${id}" ${dataAttrs}>
-  <input type="hidden" name="${field_name}" value="${val}" data-role="wkt">
-  <div class="sc-postgis-map" style="height:240px"></div>
-  ${hasZ ? '<input type="number" step="any" class="form-control mt-1" ' +
-             'placeholder="Altitude / measure" data-role="alt">' : ''}
+${LEAFLET.header()}
+<!-- Load wellknown.js when not already present -->
+<script>
+if(!window.wellknown){
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
+  document.head.appendChild(s);
+}
+</script>
+
+<!-- Hidden input that Saltcorn actually reads/writes -->
+<input type="hidden" id="${mapId}-wkt" name="${name}" value="${safeVal}">
+
+<!-- Raw WKT textarea (toggleable) for power‑users -->
+<div class="mb-2">
+  <button type="button" class="btn btn-sm btn-outline-secondary"
+          data-bs-toggle="collapse" data-bs-target="#${mapId}-raw">
+    Toggle raw WKT editor
+  </button>
 </div>
+<div id="${mapId}-raw" class="collapse mb-2">
+  <textarea class="form-control" rows="3"
+            id="${mapId}-rawtxt">${safeVal}</textarea>
+</div>
+
+<!-- Map container -->
+<div id="${mapId}" style="height:400px"></div>
 
 <script>
 (function(){
-  if(!window.L) return;            /* Leaflet not yet loaded – safety net */
-  const wrap   = document.getElementById('${id}');
-  if(!wrap) return;
+  const init=()=>{
+    if(!window.L){ setTimeout(init,50); return; }
 
-  const mapEl  = wrap.querySelector('.sc-postgis-map');
-  const hidden = wrap.querySelector('[data-role="wkt"]');
-  const altEl  = wrap.querySelector('[data-role="alt"]');
+    /* Lazy‑load leaflet.draw only once */
+    const loadDraw=(cb)=>{
+      if(window.L && window.L.Draw){ cb(); return; }
+      const css=document.createElement('link');
+      css.rel='stylesheet';
+      css.href='https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css';
+      document.head.appendChild(css);
 
-  const hasZ   = ${hasZ ? 'true' : 'false'};
+      const js=document.createElement('script');
+      js.src='https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
+      js.onload=cb;
+      document.head.appendChild(js);
+    };
 
-  const lat  = Number(wrap.dataset.centerLat)  || ${DEFAULT_CENTER.lat};
-  const lng  = Number(wrap.dataset.centerLng)  || ${DEFAULT_CENTER.lng};
-  const zoom = Number(wrap.dataset.centerZoom) || ${DEFAULT_CENTER.zoom};
+    loadDraw(()=>{
+      const map=L.map(${JSON.stringify(mapId)}).setView([0,0],2);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+        attribution:'&copy; OpenStreetMap contributors',
+      }).addTo(map);
 
-  const map = L.map(mapEl).setView([lat, lng], zoom);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-    maxZoom: 19
-  }).addTo(map);
+      const featureGroup=new L.FeatureGroup().addTo(map);
 
-  let marker;
+      /* Populate from existing WKT */
+      const initWkt=document.getElementById('${mapId}-wkt').value;
+      if(initWkt && window.wellknown){
+        try{
+          const g=window.wellknown.parse(initWkt);
+          if(g){
+            const lyr=L.geoJSON(g);
+            lyr.eachLayer((l)=>featureGroup.addLayer(l));
+            map.fitBounds(featureGroup.getBounds());
+          }
+        }catch(e){}
+      }
 
-  /** Updates the hidden input with WKT (POINT or POINT Z). */
-  function updateHidden(latlng) {
-    if (!latlng) return;
-    if (hasZ) {
-      const alt = altEl ? Number(altEl.value) || 0 : 0;
-      hidden.value = \`POINT Z(\${latlng.lng} \${latlng.lat} \${alt})\`;
-    } else {
-      hidden.value = \`POINT(\${latlng.lng} \${latlng.lat})\`;
-    }
-  }
+      /* Draw control */
+      const drawCtl=new L.Control.Draw({
+        edit:{ featureGroup, remove:true },
+        draw:{
+          polygon: true,
+          polyline:true,
+          marker:  true,
+          rectangle:true,
+          circle:  false,
+          circlemarker:false,
+        }
+      });
+      map.addControl(drawCtl);
 
-  map.on('click', function(e) {
-    if (marker) map.removeLayer(marker);
-    marker = L.marker(e.latlng, { draggable: true }).addTo(map);
-    updateHidden(e.latlng);
-    marker.on('dragend', () => updateHidden(marker.getLatLng()));
-  });
+      const wktInput=document.getElementById('${mapId}-wkt');
+      const rawTxt=document.getElementById('${mapId}-rawtxt');
 
-  if (altEl) {
-    altEl.addEventListener('input', () => {
-      if (marker) updateHidden(marker.getLatLng());
+      const syncToInput=()=>{
+        const geo=featureGroup.toGeoJSON();
+        if(geo.features && geo.features.length){
+          const wkt=window.wellknown.stringify(geo.features[0].geometry);
+          wktInput.value=wkt;
+          rawTxt.value=wkt;
+        }else{
+          wktInput.value='';
+          rawTxt.value='';
+        }
+      };
+
+      map.on(L.Draw.Event.CREATED,(e)=>{
+        featureGroup.clearLayers();
+        featureGroup.addLayer(e.layer);
+        syncToInput();
+      });
+      map.on(L.Draw.Event.EDITED, syncToInput);
+      map.on(L.Draw.Event.DELETED, syncToInput);
+
+      /* Keep hidden and textarea in sync */
+      rawTxt.addEventListener('input',()=>{
+        wktInput.value=rawTxt.value;
+      });
     });
-  }
+  };
+
+  if(document.readyState!=='loading') init();
+  else document.addEventListener('DOMContentLoaded', init);
 })();
 </script>`;
     },
