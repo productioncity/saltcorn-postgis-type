@@ -18,11 +18,11 @@
 const { DEFAULT_CENTER, LEAFLET } = require('../constants');
 
 const DRAW_JS =
-  'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
+    'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
 const DRAW_CSS =
-  'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css';
+    'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css';
 const WELLKNOWN_JS =
-  'https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
+    'https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
 
 /**
  * Helper that normalises Saltcorn’s two possible call signatures:
@@ -33,30 +33,30 @@ const WELLKNOWN_JS =
  * @returns {{name:string,value:string,attrs?:object,cls?:string}}
  */
 function unpackArgs(args) {
-  /** @type {string} */
-  let name = '';
-  /** @type {string} */
-  let value = '';
-  /** @type {object|undefined} */
-  let attrs;
-  /** @type {string|undefined} */
-  let cls;
+    /** @type {string} */
+    let name = '';
+    /** @type {string} */
+    let value = '';
+    /** @type {object|undefined} */
+    let attrs;
+    /** @type {string|undefined} */
+    let cls;
 
-  if (args[0] && typeof args[0] === 'object' && 'name' in args[0]) {
-    // Field object form
-    // @ts-ignore – runtime shape test
-    name = args[0].name;
-    value = args[1] ?? '';
-    attrs = args[2];
-    cls = args[3];
-  } else {
-    // Primitive form (string field name)
-    name = args[0] ?? '';
-    value = args[1] ?? '';
-    attrs = args[2];
-    cls = args[3];
-  }
-  return { name, value: String(value ?? ''), attrs, cls };
+    if (args[0] && typeof args[0] === 'object' && 'name' in args[0]) {
+        // Field object form
+        // @ts-ignore – runtime shape test
+        name = args[0].name;
+        value = args[1] ?? '';
+        attrs = args[2];
+        cls = args[3];
+    } else {
+        // Primitive form (string field name)
+        name = args[0] ?? '';
+        value = args[1] ?? '';
+        attrs = args[2];
+        cls = args[3];
+    }
+    return { name, value: String(value ?? ''), attrs, cls };
 }
 
 /**
@@ -65,47 +65,46 @@ function unpackArgs(args) {
  * @returns {import('@saltcorn/types').FieldView}
  */
 function mapEditView() {
-  return {
-    name: 'edit',
-    isEdit: true,
-    description: 'Interactive Leaflet editor for PostGIS geometries.',
-    /* eslint-disable max-lines-per-function */
-    run(/* …dynamic… */) {
-      const { name: fieldName, value: current, attrs = {}, cls = '' } =
-        unpackArgs(arguments);
+    return {
+        name: 'edit',
+        isEdit: true,
+        description: 'Interactive Leaflet editor for PostGIS geometries.',
+        /* eslint-disable max-lines-per-function */
+        run(/* …dynamic… */) {
+            const { name: fieldName, value: current, attrs = {}, cls = '' } =
+                unpackArgs(arguments);
 
-      const mapId = `map_${Math.random().toString(36).slice(2)}`;
-      const inputId = `in_${mapId}`;
+            const mapId = `map_${Math.random().toString(36).slice(2)}`;
+            const inputId = `in_${mapId}`;
 
-      // Z‑value helper only if the field (or current value) is 3‑D.
-      const dimAttr = String(attrs?.dim ?? '').toUpperCase();
-      const hasZ =
-        dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(current || '');
-      const zId = hasZ ? `z_${mapId}` : null;
+            // Z‑value helper only if the field (or current value) is 3‑D.
+            const dimAttr = String(attrs?.dim ?? '').toUpperCase();
+            const hasZ =
+                dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(current || '');
+            const zId = hasZ ? `z_${mapId}` : null;
 
-      const { lat, lng, zoom } = DEFAULT_CENTER;
+            const { lat, lng, zoom } = DEFAULT_CENTER;
 
-      return `
+            return `
 <div class="${cls}">
   <div id="${mapId}" style="height:300px;" class="border rounded"></div>
   <input type="hidden" id="${inputId}" name="${fieldName}" value="${current}">
-  ${
-    hasZ
-      ? `<div class="mt-1">
+  ${hasZ
+                    ? `<div class="mt-1">
            <label for="${zId}" class="form-label mb-0">Z&nbsp;value</label>
            <input type="number" id="${zId}" class="form-control form-control-sm" step="any">
          </div>`
-      : ''
-  }
+                    : ''
+                }
 </div>
 
 <script>
-${String(function scParsePointWKT(wkt){
-  if(typeof wkt!=='string') return null;
-  const m=wkt.replace(/^SRID=\\d+;/i,'')
-             .match(/^POINT[^()]*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)\\s*/i);
-  return m?[Number(m[2]),Number(m[1])]:null;
-})}
+${String(function scParsePointWKT(wkt) {
+                    if (typeof wkt !== 'string') return null;
+                    const m = wkt.replace(/^SRID=\\d+;/i, '')
+                        .match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*/i);
+                    return m ? [Number(m[2]), Number(m[1])] : null;
+                })}
 
 (function(){
   /* ===== 1. Utility: dynamic dependency loader ===================== */
@@ -172,9 +171,9 @@ ${String(function scParsePointWKT(wkt){
   }
 })();
 </script>`;
-    },
-    /* eslint-enable max-lines-per-function */
-  };
+        },
+        /* eslint-enable max-lines-per-function */
+    };
 }
 
 module.exports = { mapEditView };
