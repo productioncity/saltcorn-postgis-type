@@ -10,9 +10,9 @@
 'use strict';
 
 const { DEFAULT_SRID, DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
-const { buildSqlName }   = require('../utils/sql-name');
-const { validateAttrs }  = require('../utils/geometry');
-const { leafletShow }    = require('../leaflet/show-view');
+const { sqlNameFactory }  = require('../utils/sql-name');
+const { validateAttrs }   = require('../utils/geometry');
+const { leafletShow }     = require('../leaflet/show-view');
 const { leafletEditView } = require('../leaflet/edit-view');
 const { textEditView }    = require('../leaflet/text-edit-view'); // Raw WKT editor
 
@@ -28,7 +28,6 @@ const { textEditView }    = require('../leaflet/text-edit-view'); // Raw WKT edi
  * @returns {import('@saltcorn/types').Type}
  */
 function makeType(cfg) {
-  /* Re‑introduce destructuring so `base` and `subtype` exist locally. */
   const { name, base, subtype, allowDim, allowSubtype } = cfg;
 
   /** @type {import('@saltcorn/types/base_plugin').TypeAttribute[]} */
@@ -58,15 +57,9 @@ function makeType(cfg) {
     });
   }
 
-  // -----------------------------------------------------------------------
-  // Provide both the canonical string and the callable generator.
-  // -----------------------------------------------------------------------
-  const { sql_name, sql_name_fn } = buildSqlName(base, subtype);
-
   return Object.freeze({
     name,
-    sql_name,      // Plain string for Saltcorn core.
-    sql_name_fn,   // Helper retained for internal plug‑in use.
+    sql_name: sqlNameFactory(base, subtype), // <- callable, string‑duck‑typed
     description: `PostGIS ${subtype || base} value`,
     attributes,
     validate_attributes: validateAttrs,
