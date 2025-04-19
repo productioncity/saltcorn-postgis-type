@@ -1,14 +1,10 @@
 /**
  * show-view.js
  * ----------------------------------------------------------------------------
- * Read‑only Leaflet display view (`"show"`).
+ * Read‑only Leaflet viewer.
  *
- * It renders a fully interactive (pan/zoom) Leaflet map but **without**
- * drawing controls, so the data cannot be changed.
- *
- * Author:      Troy Kelly  <troy@team.production.city>
- * First‑created: 2025‑04‑19
- * Licence:     CC0‑1.0
+ * Author:  Troy Kelly <troy@team.production.city>
+ * Licence: CC0‑1.0
  */
 
 'use strict';
@@ -17,8 +13,6 @@ const { DEFAULT_CENTER, LEAFLET } = require('../constants');
 const { wktToGeoJSON } = require('../utils/geometry');
 
 /**
- * Create read‑only map view.
- *
  * @returns {import('@saltcorn/types').FieldView}
  */
 function showView() {
@@ -26,37 +20,34 @@ function showView() {
     name: 'show',
     isEdit: false,
     /**
-     * @param {object} opts  — Saltcorn passes an object wrapper
-     * @param {string=} opts.value
+     * @param {{value?: string}} param
      * @returns {string}
      */
-    run({ value }) {
+    run({ value = '' }) {
       const mapId = `show_${Math.random().toString(36).slice(2)}`;
-      const geo   = wktToGeoJSON(value);
+      const gj    = wktToGeoJSON(value);
       const { lat, lng, zoom } = DEFAULT_CENTER;
       return `
 <div id="${mapId}" style="height:250px;" class="border"></div>
 <script>
 (function(){
-  function ensure(cb){
-    if(window.L) return cb();
-    const css=document.createElement('link'); css.rel='stylesheet';
-    css.href=${JSON.stringify(LEAFLET.css)}; document.head.appendChild(css);
-    const js=document.createElement('script'); js.src=${JSON.stringify(LEAFLET.js)};
-    js.async=true; js.onload=cb; document.head.appendChild(js);
-  }
-  ensure(function(){
-    const map=L.map(${JSON.stringify(mapId)}).setView(
-      [${lat},${lng}],${zoom});
+  function css(h){return !!document.querySelector('link[href="'+h+'"]');}
+  function js(s){return !!(document._loadedScripts&&document._loadedScripts[s]);}
+  function addCss(h){return new Promise(r=>{if(css(h))return r();const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;document.head.appendChild(l);});}
+  function addJs(s){return new Promise(r=>{if(js(s))return r();const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};document.head.appendChild(sc);});}
+  (async function(){
+    await addCss(${JSON.stringify(LEAFLET.css)});
+    await addJs(${JSON.stringify(LEAFLET.js)});
+    const map=L.map(${JSON.stringify(mapId)}).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
       attribution:'&copy; OpenStreetMap'
     }).addTo(map);
-    const gj=${JSON.stringify(geo ?? null)};
+    const gj=${JSON.stringify(gj)};
     if(gj){
-      const layer=L.geoJSON(gj).addTo(map);
-      map.fitBounds(layer.getBounds(),{maxZoom:14});
+      const lyr=L.geoJSON(gj).addTo(map);
+      map.fitBounds(lyr.getBounds(),{maxZoom:14});
     }
-  });
+  })();
 })();
 </script>`;
     },

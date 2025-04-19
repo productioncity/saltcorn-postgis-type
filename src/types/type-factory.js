@@ -1,34 +1,29 @@
 /**
  * type-factory.js
  * ---------------------------------------------------------------------------
- * Produces full Saltcorn `Type` objects for every supported PostGIS subtype.
+ * Generates Saltcorn `Type` objects for every PostGIS subtype.
  *
- * CHANGE‑LOG (2025‑04‑19):
- *   • Added canonical `edit` alias (points to the `"map"` editor) so all
- *     Saltcorn builders find a default edit view.
- *   • Ensured all new field‑views are wired consistently.
+ * Updated 2025‑04‑19 – fully wires: edit (alias), map, raw, show.
  *
- * Author:   Troy Kelly  <troy@team.production.city>
- * Licence:  CC0‑1.0
+ * Author: Troy Kelly <troy@team.production.city>
+ * Licence: CC0‑1.0
  */
 
 'use strict';
 
 const { DEFAULT_SRID, DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
-const { sqlNameFactory } = require('../utils/sql-name');
-const { validateAttrs }  = require('../utils/geometry');
+const { sqlNameFactory }  = require('../utils/sql-name');
+const { validateAttrs }   = require('../utils/geometry');
 
 const { mapEditView } = require('../leaflet/map-edit-view');
 const { showView }    = require('../leaflet/show-view');
 const { rawView }     = require('../leaflet/raw-view');
 
 /**
- * Build a Saltcorn Type object.
- *
  * @param {object} cfg
- * @param {string}  cfg.name
+ * @param {string} cfg.name
  * @param {'GEOMETRY'|'GEOGRAPHY'} cfg.base
- * @param {string}  cfg.subtype
+ * @param {string} cfg.subtype
  * @param {boolean} cfg.allowDim
  * @param {boolean} cfg.allowSubtype
  * @returns {import('@saltcorn/types').Type}
@@ -38,25 +33,22 @@ function makeType(cfg) {
 
   /** @type {import('@saltcorn/types/base_plugin').TypeAttribute[]} */
   const attributes = [
-    { name: 'srid',   label: 'SRID',   type: 'Integer', default: DEFAULT_SRID },
+    { name: 'srid', label: 'SRID', type: 'Integer', default: DEFAULT_SRID },
   ];
-
-  if (allowDim) {
+  if (allowDim)
     attributes.push({
-      name: 'dim', label: 'Dim', type: 'String', attributes: { options: DIM_MODS },
+      name: 'dim', label: 'Dim', type: 'String',
+      attributes: { options: DIM_MODS },
     });
-  }
-  if (allowSubtype) {
+  if (allowSubtype)
     attributes.push({
-      name: 'subtype',
-      label: 'Subtype',
-      type: 'String',
+      name: 'subtype', label: 'Subtype', type: 'String',
       attributes: { options: BASE_GEOM_TYPES },
     });
-  }
 
-  /* Single instance reused for both "edit" alias and explicit "map". */
-  const mapView = mapEditView(name);
+  /* Re‑use one instance for map + edit alias to guarantee equality. */
+  const mapFV  = mapEditView();
+  const editFV = { ...mapFV, name: 'edit' };
 
   return Object.freeze({
     name,
@@ -65,10 +57,10 @@ function makeType(cfg) {
     attributes,
     validate_attributes: validateAttrs,
     fieldviews: {
-      edit: mapView,      // Saltcorn’s default edit view key (alias)
-      map:  mapView,      // Explicit interactive Leaflet editor
-      raw:  rawView(),    // Dual‑mode raw (edit + show)
-      show: showView(),   // Read‑only Leaflet display
+      map:  mapFV,        // explicit key
+      edit: editFV,       // mandatory Saltcorn default
+      raw:  rawView(),    // dual‑mode
+      show: showView(),   // read‑only
     },
     read: (v) => (typeof v === 'string' ? v : undefined),
     readFromDB: (v) => (typeof v === 'string' ? `${v}::text` : undefined),

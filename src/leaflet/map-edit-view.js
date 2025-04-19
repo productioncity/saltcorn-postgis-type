@@ -1,27 +1,24 @@
 /**
  * map-edit-view.js
  * ----------------------------------------------------------------------------
- * Field‑view `"map"` – interactive Leaflet editor.
+ * Field‑view "map" – interactive Leaflet editor.
  *
- * Fully supports:
- *   • Drawing / editing / deleting Points, LineStrings, Polygons
- *     (via Leaflet.Draw).
- *   • Multi‑feature editing: serialises to GEOMETRYCOLLECTION in WKT.
- *   • Optional Z‑value helper input.
+ * Supports:
+ *   • Draw / edit / delete Points, LineStrings, Polygons (Leaflet‑Draw).
+ *   • Multi‑feature editing → serialises to GEOMETRYCOLLECTION WKT.
+ *   • Optional helper input for common Z‑value.
  *
- * All external libraries (Leaflet, Leaflet‑Draw, Wellknown) are injected
- * lazily so there is **zero** global impact on pages that never use this
- * field‑view.
+ * External libraries are injected lazily so pages that do not use the view
+ * remain lightweight.
  *
  * Author:   Troy Kelly  <troy@team.production.city>
- * Updated:  2025‑04‑19 – add Wellknown loader + safe dependency chain.
+ * Updated:  2025‑04‑19 – hardened dependency loader & removed early WK refs.
  * Licence:  CC0‑1.0
  */
 
 'use strict';
 
 const { DEFAULT_CENTER, LEAFLET } = require('../constants');
-const { wktToGeoJSON } = require('../utils/geometry');
 
 const DRAW_JS  =
   'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
@@ -31,125 +28,128 @@ const WELLKNOWN_JS =
   'https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
 
 /**
- * Creates the interactive Leaflet editor field‑view.
+ * Build the interactive Leaflet editor.
  *
- * @param {string} typeName  Lower‑case Saltcorn type name (point, polygon, …).
  * @returns {import('@saltcorn/types').FieldView}
  */
-function mapEditView(typeName) {
+function mapEditView() {
   return {
     name: 'map',
     isEdit: true,
+    /* eslint-disable max-lines */
     /**
      * @param {import('@saltcorn/types').Field} field
      * @param {string=} current
-     * @param {unknown} _attrs
-     * @param {string=} classes
      * @returns {string}
      */
-    /* eslint-disable max-lines */
-    run(field, current, _attrs, classes = '') {
+    run(field, current = '') {
       const mapId   = `map_${field.name}_${Math.random().toString(36).slice(2)}`;
       const inputId = `in_${mapId}`;
-      const zId     = `z_${mapId}`;
+      const hasZ    = /Z[^A-Za-z]*\(/i.test(current);
+      const zId     = hasZ
+        ? `z_${mapId}`
+        : null;
 
-      const value = current || '';
-      const hasZ  = /Z[^A-Za-z]*\(/i.test(value);
       const { lat, lng, zoom } = DEFAULT_CENTER;
 
       return `
 <div id="${mapId}" style="height:300px;" class="border"></div>
-<input type="hidden" id="${inputId}" name="${field.name}" value="${value}">
-${
-  hasZ
-    ? `<div class="mt-1">
-         <label class="form-label mb-0" for="${zId}">Z&nbsp;value</label>
-         <input type="number" step="any" class="form-control form-control-sm"
-                id="${zId}">
-       </div>`
-    : ''
-}
+<input type="hidden" id="${inputId}" name="${field.name}" value="${current}">
+${hasZ
+  ? `<div class="mt-1">
+       <label class="form-label mb-0" for="${zId}">Z&nbsp;value</label>
+       <input type="number" step="any"
+              id="${zId}" class="form-control form-control-sm">
+     </div>`
+  : ''}
 <script>
 (function(){
-  const mapDiv = document.getElementById(${JSON.stringify(mapId)});
-  /* ---------------------------------------------------------------------- */
-  /* Dynamic dependency loader – guarantees the following order:            */
-  /*   1. leaflet.css   2. draw.css   3. leaflet.js   4. draw.js   5. WK.js */
-  /* ---------------------------------------------------------------------- */
-  function injectCss(href){
-    return new Promise((resolve)=>{
-      if(document.querySelector('link[href="'+href+'"]')) return resolve();
+  /* ------------------------------------------------------------------ *
+   * 1.  Dynamic dependency loader (CSS → JS order).                    *
+   * ------------------------------------------------------------------ */
+  function needCss(href){
+    return !!document.querySelector('link[href="'+href+'"]');
+  }
+  function needJs(src){
+    return !!(document._loadedScripts&&document._loadedScripts[src]);
+  }
+  function loadCss(href){
+    return new Promise((res)=>{
+      if(needCss(href)) return res();
       const l=document.createElement('link');
-      l.rel='stylesheet'; l.href=href; l.onload=resolve;
-      document.head.appendChild(l);
+      l.rel='stylesheet'; l.href=href; l.onload=res; document.head.appendChild(l);
     });
   }
-  function injectJs(src){
-    return new Promise((resolve)=>{
-      if(document.querySelector('script[src="'+src+'"]') || window._ljs[src])
-        return resolve();
+  function loadJs(src){
+    return new Promise((res)=>{
+      if(needJs(src)) return res();
       const s=document.createElement('script');
-      s.src=src; s.async=true; s.onload=function(){ window._ljs=window._ljs||{};
-        window._ljs[src]=true; resolve(); };
+      s.src=src; s.async=true;
+      s.onload=function(){ document._loadedScripts=document._loadedScripts||{};
+                           document._loadedScripts[src]=true; res(); };
       document.head.appendChild(s);
     });
   }
-  (async function loadDeps(){
-    await injectCss(${JSON.stringify(LEAFLET.css)});
-    await injectCss(${JSON.stringify(DRAW_CSS)});
-    await injectJs(${JSON.stringify(LEAFLET.js)});
-    await injectJs(${JSON.stringify(DRAW_JS)});
-    await injectJs(${JSON.stringify(WELLKNOWN_JS)});
-    initEditor();
+  (async function(){
+    await loadCss(${JSON.stringify(LEAFLET.css)});
+    await loadCss(${JSON.stringify(DRAW_CSS)});
+    await loadJs(${JSON.stringify(LEAFLET.js)});
+    await loadJs(${JSON.stringify(DRAW_JS)});
+    await loadJs(${JSON.stringify(WELLKNOWN_JS)});
+    initMap();
   })();
 
-  /* ---------------------------------------------------------------------- */
-  /* Main editor initialisation (runs only after all libs are present)      */
-  /* ---------------------------------------------------------------------- */
-  function initEditor(){
+  /* ------------------------------------------------------------------ *
+   * 2.  Initialise editor only after libs are present.                 *
+   * ------------------------------------------------------------------ */
+  function initMap(){
+    const mapDiv=document.getElementById(${JSON.stringify(mapId)});
+    const hidden=document.getElementById(${JSON.stringify(inputId)});
     const map=L.map(mapDiv).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-      attribution:'&copy; OpenStreetMap contributors'
+      attribution:'&copy; OpenStreetMap'
     }).addTo(map);
 
-    const drawn = new L.FeatureGroup().addTo(map);
-    const hiddenInput = document.getElementById(${JSON.stringify(inputId)});
+    /* Feature group that Leaflet‑Draw will edit. */
+    const drawn=new L.FeatureGroup().addTo(map);
 
-    /* ——— Hydrate existing geometry ——— */
-    if(hiddenInput.value){
+    /* Hydrate pre‑existing value (if any). */
+    if(hidden.value){
       try{
-        const gj=window.wellknown.parse(hiddenInput.value);
+        const gj=window.wellknown.parse(hidden.value);
         if(gj){
-          const layer=L.geoJSON(gj).addTo(drawn);
-          map.fitBounds(layer.getBounds(),{ maxZoom: 14 });
+          const lyr=L.geoJSON(gj).addTo(drawn);
+          map.fitBounds(lyr.getBounds(),{maxZoom:14});
         }
-      }catch{/* ignore bad WKT */}
+      }catch{/* malformed input – ignore */}
     }
 
-    /* ——— Draw controls ——— */
-    map.addControl(new L.Control.Draw({
-      edit: { featureGroup: drawn },
-      draw: {
-        polygon: true, polyline: true, rectangle: false,
-        circle: false, marker: true, circlemarker: false
-      },
-    }));
+    /* Leaflet‑Draw toolbar. */
+    map.addControl(
+      new L.Control.Draw({
+        edit:{ featureGroup: drawn },
+        draw:{
+          polygon:true, polyline:true, rectangle:false,
+          circle:false, marker:true, circlemarker:false
+        }
+      })
+    );
 
-    /* ——— Helpers ——— */
+    /* Serialise FG → WKT helper. */
     function toWkt(){
-      const geo=drawn.toGeoJSON();
-      if(!geo.features.length) return '';
-      if(geo.features.length===1)
-        return window.wellknown.stringify(geo.features[0].geometry);
-      const wkts=geo.features.map(f=>window.wellknown.stringify(f.geometry));
-      return 'GEOMETRYCOLLECTION(' + wkts.join(',') + ')';
+      const gj=drawn.toGeoJSON();
+      if(!gj.features.length) return '';
+      if(gj.features.length===1)
+        return window.wellknown.stringify(gj.features[0].geometry);
+      return 'GEOMETRYCOLLECTION(' +
+             gj.features.map(f=>window.wellknown.stringify(f.geometry)).join(',') +
+             ')';
     }
-    function syncHidden(){ hiddenInput.value = toWkt(); }
+    function sync(){ hidden.value=toWkt(); }
 
-    /* ——— Event wiring ——— */
-    map.on(L.Draw.Event.CREATED, (e)=>{ drawn.addLayer(e.layer); syncHidden(); });
-    map.on(L.Draw.Event.EDITED,  syncHidden);
-    map.on(L.Draw.Event.DELETED, syncHidden);
+    map.on(L.Draw.Event.CREATED,(e)=>{ drawn.addLayer(e.layer); sync(); });
+    map.on(L.Draw.Event.EDITED, sync);
+    map.on(L.Draw.Event.DELETED, sync);
   }
 })();
 </script>`;
