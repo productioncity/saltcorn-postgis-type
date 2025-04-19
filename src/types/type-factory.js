@@ -12,12 +12,12 @@
 'use strict';
 
 const { DEFAULT_SRID, DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
-const { sqlNameFactory }  = require('../utils/sql-name');
-const { validateAttrs }   = require('../utils/geometry');
+const { sqlNameFactory } = require('../utils/sql-name');
+const { validateAttrs } = require('../utils/geometry');
 
 const { mapEditView } = require('../leaflet/map-edit-view');
-const { showView }    = require('../leaflet/show-view');
-const { rawView }     = require('../leaflet/raw-view');
+const { showView } = require('../leaflet/show-view');
+const { rawView } = require('../leaflet/raw-view');
 
 /**
  * @param {object} cfg
@@ -35,20 +35,36 @@ function makeType(cfg) {
   const attributes = [
     { name: 'srid', label: 'SRID', type: 'Integer', default: DEFAULT_SRID },
   ];
-  if (allowDim)
+  if (allowDim) {
     attributes.push({
-      name: 'dim', label: 'Dim', type: 'String',
+      name: 'dim',
+      label: 'Dim',
+      type: 'String',
       attributes: { options: DIM_MODS },
     });
-  if (allowSubtype)
+  }
+  if (allowSubtype) {
     attributes.push({
-      name: 'subtype', label: 'Subtype', type: 'String',
+      name: 'subtype',
+      label: 'Subtype',
+      type: 'String',
       attributes: { options: BASE_GEOM_TYPES },
     });
+  }
 
-  /* Re‑use one instance for map + edit alias to guarantee equality. */
-  const mapFV  = mapEditView();
-  const editFV = { ...mapFV, name: 'edit' };
+  /* ------------------------------------------------------------------ */
+  /* Field‑views                                                        */
+  /* ------------------------------------------------------------------ */
+  /* We derive two variants from the same Leaflet component:            *
+   *   • “map”  – read‑only, offered in Show/List builders.             *
+   *   • “edit” – editable, offered in Edit/New builders.               */
+  const baseMapFV = mapEditView();
+
+  /** Read‑only map view (isEdit=false) */
+  const mapFV = { ...baseMapFV, name: 'map', isEdit: false };
+
+  /** Editing variant (isEdit=true) */
+  const editFV = { ...baseMapFV, name: 'edit', isEdit: true };
 
   return Object.freeze({
     name,
@@ -57,13 +73,15 @@ function makeType(cfg) {
     attributes,
     validate_attributes: validateAttrs,
     fieldviews: {
-      map:  mapFV,        // explicit key
-      edit: editFV,       // mandatory Saltcorn default
-      raw:  rawView(),    // dual‑mode
-      show: showView(),   // read‑only
+      map: mapFV,
+      edit: editFV,
+      raw: rawView(),
+      show: showView(),
     },
     read: (v) => (typeof v === 'string' ? v : undefined),
-    readFromDB: (v) => (typeof v === 'string' ? `${v}::text` : undefined),
+
+    /* Ensure Postgres returns text *in EWKT format*, not hex WKB. */
+    readFromDB: (v) => `ST_AsEWKT(${v})`,
   });
 }
 
