@@ -9,36 +9,30 @@
  * • For every other spatial type the view gracefully falls back to a plain
  *   <textarea> for raw WKT/EWKT or GeoJSON input.
  *
- * Author:       Troy Kelly <troy@team.production.city>
+ * Author:       Troy Kelly <troy@team.production.city>
  * First‑created: 2025‑04‑19
  * Licence:      CC0‑1.0
  */
 
 'use strict';
 
-const {
-  textarea,
-  div,
-  script,
-  input,
-} = require('@saltcorn/markup/tags');
-
+const { textarea, div, script, input } = require('@saltcorn/markup/tags');
 const { DEFAULT_CENTER } = require('../constants');
 
 /**
- * Small client‑side helper – injected as string inside <script>.
- * Parses WKT/EWKT `POINT(… …)` and returns `[lat, lng] | null`.
- * Keep in ES5 syntax for maximum browser compatibility.
+ * Serialises a small helper function (ES5) that parses `POINT(lon lat)` WKT.
  *
- * @returns {string}  Self‑contained JS function source.
+ * @returns {string} Function source code (no wrapping, ready to embed).
  */
 function inlinePointParserSource() {
   /* eslint-disable func-names */
   return String(function scParsePointWKT(wkt) {
     if (typeof wkt !== 'string') return null;
-    const m = wkt
+    var m = wkt
       .replace(/^SRID=\d+;/i, '')
-      .match(/^POINT[^()]*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)\\s*\\)/i);
+      .match(
+        /^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*\)/i,
+      );
     return m ? [Number(m[2]), Number(m[1])] : null; // [lat, lng]
   });
   /* eslint-enable func-names */
@@ -47,73 +41,82 @@ function inlinePointParserSource() {
 /**
  * Builds the field‑view object for a concrete PostGIS type.
  *
- * @param {string} typeName  Internal type name (e.g. 'point', 'polygon').
+ * @param {string} typeName Internal type name (e.g. 'point', 'polygon').
  * @returns {import('@saltcorn/types').FieldViewObj}
  */
 function leafletEditView(typeName) {
   const isPoint = typeName === 'point';
 
   /**
-   * @param {string}      fieldName  Name of the field in the form.
-   * @param {string|null} value      Current value (may be null on “new” forms).
-   * @param {unknown}     attrs      _Unused_ – kept for Saltcorn signature.
-   * @param {string}      cls        Additional CSS classes.
-   * @returns {string}               HTML markup for the edit control.
+   * Editor renderer.
+   *
+   * @param {string} fieldName
+   * @param {string|null} value
+   * @param {unknown} _attrs  Unused (kept for Saltcorn signature).
+   * @param {string} cls      Extra CSS classes.
+   * @returns {string}        HTML markup.
    */
-  const run = (fieldName, value, attrs, cls) => {
+  const run = (fieldName, value, _attrs, cls) => {
     /* ===================================================================== */
     /* 1. Interactive POINT map‑picker                                      */
     /* ===================================================================== */
     if (isPoint) {
-      const mapId   = `sc-postgis-edit-map-${Math.random().toString(36).slice(2)}`;
+      const mapId = `sc-postgis-edit-map-${Math.random().toString(36).slice(2)}`;
       const inputId = `input-${fieldName.replace(/[^A-Za-z0-9_-]/g, '')}`;
 
-      /* Current coordinate or fallback to default centre (Sydney CBD). */
+      // Default coordinates (Sydney CBD) or pre‑existing value.
       let initialLat = DEFAULT_CENTER.lat;
       let initialLng = DEFAULT_CENTER.lng;
       if (typeof value === 'string') {
-        const m = value
+        const match = value
           .replace(/^SRID=\d+;/i, '')
           .match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*\)/i);
-        if (m) {
-          initialLng = Number(m[1]);
-          initialLat = Number(m[2]);
+        if (match) {
+          initialLng = Number(match[1]);
+          initialLat = Number(match[2]);
         }
       }
 
-      return (
-        div(
-          { class: 'sc-postgis-point-edit' },
-          div({
-            id:    mapId,
-            style: 'width:100%;height:220px;border:1px solid #ced4da;border-radius:4px;margin-bottom:4px;',
-          }),
-        ) +
-        /* Hidden <input> carrying the actual field value */
-        input({
-          type:  'hidden',
-          id:    inputId,
-          name:  fieldName,
-          value: value || '',
-        }) +
-        script(
-          //<![CDATA[
-          `
-(${inlinePointParserSource()});
+      /* ------------------------------------------------------------------ */
+      /* Build HTML                                                          */
+      /* ------------------------------------------------------------------ */
+      let html = '';
+      html += div(
+        { class: 'sc-postgis-point-edit' },
+        div({
+          id: mapId,
+          style:
+            'width:100%;height:220px;border:1px solid #ced4da;border-radius:4px;margin-bottom:4px;',
+        }),
+      );
+
+      // Hidden input carrying the actual WKT string
+      html += input({
+        type: 'hidden',
+        id: inputId,
+        name: fieldName,
+        value: value || '',
+      });
+
+      // Client‑side script
+      const scriptContent = `
+${inlinePointParserSource()}
 
 (function () {
   var map, marker;
+
   function init() {
-    var el   = document.getElementById('${mapId}');
-    var inp  = document.getElementById('${inputId}');
+    var el  = document.getElementById('${mapId}');
+    var inp = document.getElementById('${inputId}');
     if (!el || !inp || !window.L) return;
 
     var startLatLng = scParsePointWKT(inp.value) || [${initialLat}, ${initialLng}];
 
     map = L.map(el).setView(startLatLng, 13);
+
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      attribution: '© OpenStreetMap contributors',
+      attribution: '© OpenStreetMap contributors',
     }).addTo(map);
 
     marker = L.marker(startLatLng, { draggable: true }).addTo(map);
@@ -134,21 +137,21 @@ function leafletEditView(typeName) {
 
   if (window.L && window.scLeafletLoaded) init();
   else document.addEventListener('DOMContentLoaded', init);
-})();`,
-          //]]>
-        ),
-      );
+})();`;
+
+      html += script(scriptContent);
+      return html;
     }
 
     /* ===================================================================== */
-    /* 2. Generic fallback – plain <textarea> for any non‑point geometry     */
+    /* 2. Generic textarea for non‑point geometries                          */
     /* ===================================================================== */
     return textarea(
       {
         class: `form-control ${cls || ''}`.trim(),
         style: 'min-height:6rem;font-family:monospace;',
-        name:  fieldName,
-        id:    `input-${fieldName}`,
+        name: fieldName,
+        id: `input-${fieldName}`,
         placeholder: 'Enter WKT, EWKT or GeoJSON',
       },
       typeof value === 'string' ? value : '',
@@ -156,10 +159,10 @@ function leafletEditView(typeName) {
   };
 
   return {
-    isEdit:       true,
-    description:  isPoint
-      ? 'Interactive Leaflet point picker (with WKT hidden input).'
-      : 'Plain textarea for WKT/EWKT/GeoJSON input.',
+    isEdit: true,
+    description: isPoint
+      ? 'Interactive Leaflet point picker (stores WKT).'
+      : 'Textarea for WKT/EWKT/GeoJSON input.',
     configFields: [],
     run,
   };
