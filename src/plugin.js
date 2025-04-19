@@ -1,12 +1,10 @@
 /**
  * plugin.js
- * Main export for the Saltcorn PostGIS Type plug‑in. Wires together all
- * modules, patches Table.getRows and exposes helper functions + actions.
+ * ---------------------------------------------------------------------------
+ * Root export – wires PostGIS types into Saltcorn and patches Table.getRows.
  *
- * Author:       Troy Kelly <troy@team.production.city>
- * First‑created: 2024‑04‑17
- * This revision: 2025‑04‑18 – Modularised.
- * Licence:      CC0‑1.0  (see LICENCE)
+ * Author:  Troy Kelly  <troy@team.production.city>
+ * Licence: CC0‑1.0
  */
 
 'use strict';
@@ -16,11 +14,12 @@
 const { types } = require('./types/catalogue');
 const { patchGetRows } = require('./table/patch-get-rows');
 const { wktToLonLat } = require('./utils/geometry');
+const { LEAFLET } = require('./constants');
 
 const TableMod = require('@saltcorn/data/models/table');
-const Field = require('@saltcorn/data/models/field');
+const Field    = require('@saltcorn/data/models/field');
 
-// Defensive import works across Saltcorn 0.x and 1.x
+/* Resolve Table class across Saltcorn 0.x / 1.x variants */
 const Table =
   TableMod && typeof TableMod.findOne === 'function'
     ? TableMod
@@ -28,7 +27,7 @@ const Table =
       ? TableMod.Table
       : TableMod;
 
-/* ──────────────── Actions ───────────────── */
+/* ───────────────────────── Actions ────────────────────────── */
 
 const createLatLngColumnsAction = {
   requireRow: false,
@@ -44,66 +43,62 @@ const createLatLngColumnsAction = {
     const tbl = await Table.findOne({ id: table_id });
     if (!tbl) return { error: 'Table not found.' };
 
-    const pointField = (await tbl.getFields()).find(
-      (f) => f.type?.name === 'point',
-    );
-    if (!pointField) return { error: 'No Point field detected.' };
+    const pointField = (await tbl.getFields())
+      .find((f) => f.type?.name === 'point');
+    if (!pointField) return { error: 'No point field detected.' };
 
     const base = pointField.name;
     const lat = await Field.create({
       table_id,
-      name: `${base}_lat`,
+      name:  `${base}_lat`,
       label: `${base} latitude`,
-      type: 'Float',
+      type:  'Float',
       calculated: true,
       expression: `ST_Y("${base}")`,
     });
     const lng = await Field.create({
       table_id,
-      name: `${base}_lng`,
+      name:  `${base}_lng`,
       label: `${base} longitude`,
-      type: 'Float',
+      type:  'Float',
       calculated: true,
       expression: `ST_X("${base}")`,
     });
 
+    /* Force Saltcorn to refresh calculated column cache */
     await tbl.update({ min_role_read: tbl.min_role_read });
-    return {
-      success: `Created columns #${lat.id} and #${lng.id}.`,
-    };
+    return { success: `Created columns #${lat.id} and #${lng.id}.` };
   },
 };
 
-/* ──────────────── Plug‑in export ───────────────── */
+/* ─────────────────────── Plug‑in Export ───────────────────── */
 
 module.exports = {
   sc_plugin_api_version: 1,
   plugin_name: 'saltcorn-postgis-type',
 
+  /* Inject local Leaflet assets so they are always web‑served */
+  headers: [
+    { css:    LEAFLET.css },
+    { script: LEAFLET.js },
+  ],
+
   /**
-   * Called exactly once on server start (or when the plug‑in is enabled).
-   * We patch Table.getRows() here so every Point column exposes virtual
-   * <col>_lat and <col>_lng floats before the first request is served.
+   * Runs once at start‑up (or when the plug‑in is enabled).
+   * Patches Table.getRows so Point columns produce virtual
+   * <col>_lat and <col>_lng properties.
    *
-   * @param {object=} _config   Unused – plug‑in is stateless.
    * @returns {void}
    */
-  onLoad(_config) {
-    let TableClass = require('@saltcorn/data/models/table');
-    if (TableClass && TableClass.Table) {
-      TableClass = TableClass.Table;
-    }
-    if (!TableClass || !TableClass.prototype) {
-      // eslint-disable-next-line no-console
+  onLoad() {
+    let T = require('@saltcorn/data/models/table');
+    if (T && T.Table) T = T.Table;
+    if (T && T.prototype) patchGetRows(T);
+    else /* eslint-disable-next-line no-console */
       console.error(
-        'saltcorn-postgis-type: Unable to patch Table.getRows() – Table class not found.',
+        'saltcorn-postgis-type: Unable to patch Table.getRows – Table class not found',
       );
-      return;
-    }
-    patchGetRows(TableClass); // idempotent – safe to call twice
   },
-
-  headers: [],
 
   types,
 
@@ -113,7 +108,7 @@ module.exports = {
 
   functions: {
     /**
-     * Convert a WKT/EWKT POINT to a `{lat,lng}` object.
+     * Convert POINT WKT→ {lat,lng,latlng}.
      * @param {string} wkt
      * @returns {{lat:number,lng:number,latlng:[number,number]}|undefined}
      */
@@ -123,5 +118,6 @@ module.exports = {
     },
   },
 
+  /* Run‑time dependencies (for Saltcorn store UI) */
   dependencies: ['wellknown'],
 };

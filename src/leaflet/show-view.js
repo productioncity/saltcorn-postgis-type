@@ -1,49 +1,61 @@
 /**
- * show-view.js
- * Read‑only Leaflet map preview field‑view – works for every geometry that
- * `wellknown` can parse. Injects Leaflet on‑demand.
+ * Show‑only Leaflet field‑view.
+ * ---------------------------------------------------------------------------
+ * Displays any PostGIS geometry value on a mini interactive Leaflet map.
  *
- * Author:       Troy Kelly <troy@team.production.city>
- * First‑created: 2024‑04‑17
- * This revision: 2025‑04‑18 – Extracted from monolithic index.js.
- * Licence:      CC0‑1.0  (see LICENCE)
+ * Author:  Troy Kelly  <troy@team.production.city>
+ * Licence: CC0‑1.0
  */
 
 'use strict';
 
-const { div, script, domReady, text: esc } = require('@saltcorn/markup/tags');
 const { LEAFLET } = require('../constants');
-const { wktToGeoJSON, wktToLonLat } = require('../utils/geometry');
+const { wktToGeoJSON } = require('../utils/geometry');
 
 /**
+ * Generates the “show” field‑view shared by every PostGIS type.
+ *
  * @returns {import('@saltcorn/types/base_plugin').FieldView}
  */
 function leafletShow() {
   return {
+    name: 'show',
     isEdit: false,
-    run(value) {
-      if (!value) return '';
-      const id = `ls${Math.random().toString(36).slice(2)}`;
-      const geojson = wktToGeoJSON(value);
-      const pointLL = wktToLonLat(value);
 
-      if (!geojson && !pointLL) return `<code>${esc(String(value))}</code>`;
+    /**
+     * @param {string} _fieldName – Unused (same render for all fields).
+     * @param {unknown} value     – WKT string from Postgres.
+     * @returns {string}          – HTML fragment.
+     */
+    run(_fieldName, value) {
+      if (typeof value !== 'string' || value.trim() === '') {
+        return '';
+      }
 
-      /* Client‑side init script */
-      const js = `
-${LEAFLET.header}
-(function(){
-  const map=L.map("${id}",{zoomControl:false,attributionControl:false});
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
-    .addTo(map);
-  ${geojson
-          ? `const layer=L.geoJSON(${JSON.stringify(geojson)}).addTo(map);
-         map.fitBounds(layer.getBounds());`
-          : `const pt=[${pointLL[1]},${pointLL[0]}];
-         L.marker(pt).addTo(map);map.setView(pt,12);`
-        }
-})();`;
-      return div({ id, style: 'height:180px' }, '…') + script(domReady(js));
+      const geo = wktToGeoJSON(value);
+      if (!geo) {
+        /* Fallback: render WKT verbatim if parsing failed */
+        return `<code>${value}</code>`;
+      }
+
+      const mapId = `pg-map-${Math.round(Math.random() * 10 ** 9)}`;
+
+      /* Inline script waits until Leaflet is loaded then draws the feature */
+      /* eslint-disable max-len */
+      return `
+${LEAFLET.header()}
+<div id="${mapId}" style="height:200px;"></div>
+<script>
+(function waitForLeaflet(cb){
+  if (window.L && window.scLeafletLoaded) cb();
+  else setTimeout(()=>waitForLeaflet(cb),50);
+})(function init(){
+  const map  = L.map('${mapId}', { zoomControl:false, attributionControl:false });
+  const gj   = L.geoJSON(${JSON.stringify(geo)}).addTo(map);
+  map.fitBounds(gj.getBounds());
+});
+</script>`;
+      /* eslint-enable max-len */
     },
   };
 }

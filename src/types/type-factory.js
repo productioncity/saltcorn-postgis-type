@@ -1,42 +1,45 @@
 /**
  * type-factory.js
- * Factory that returns fully‑formed Saltcorn `Type` objects for PostGIS.
+ * ---------------------------------------------------------------------------
+ * Produces full Saltcorn `Type` objects for every supported PostGIS subtype.
  *
- * Author:       Troy Kelly <troy@team.production.city>
- * First‑created: 2024‑04‑17
- * This revision: 2025‑04‑18 – Extracted from monolithic index.js.
- * Licence:      CC0‑1.0  (see LICENCE)
+ * Author:  Troy Kelly  <troy@team.production.city>
+ * Licence: CC0‑1.0
  */
 
 'use strict';
 
-const { DEFAULT_SRID } = require('../constants');
+const { DEFAULT_SRID, DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
 const { sqlNameFactory } = require('../utils/sql-name');
 const { validateAttrs } = require('../utils/geometry');
 const { leafletShow } = require('../leaflet/show-view');
-const { leafletPointEditView } = require('../leaflet/point-edit-view');
+const { leafletEditView } = require('../leaflet/edit-view');
 
 /**
- * Construct a Saltcorn `Type` object.
+ * Build a Saltcorn Type.
  *
- * @param {object} def
- * @param {string} def.name         Internal type name.
- * @param {'GEOMETRY'|'GEOGRAPHY'} def.base Base PostGIS type.
- * @param {string} def.subtype      Default subtype token.
- * @param {boolean} def.allowDim    Whether `dim` attribute is exposed.
- * @param {boolean} def.allowSubtype Whether `subtype` attribute is exposed.
- * @returns {import('@saltcorn/types/base_plugin').Type}
+ * @param {object} cfg
+ * @param {string} cfg.name              – Internal type name (lower‑case).
+ * @param {'GEOMETRY'|'GEOGRAPHY'} cfg.base – Base PostGIS type.
+ * @param {string} cfg.subtype           – Default geometry subtype.
+ * @param {boolean} cfg.allowDim         – Expose `dim` attribute?
+ * @param {boolean} cfg.allowSubtype     – Expose `subtype` attribute?
+ * @returns {import('@saltcorn/types').Type}
  */
-function makeType(def) {
-  const { name, base, subtype, allowDim, allowSubtype } = def;
-  const label = (subtype || base).replace(/^\w/, (c) => c.toUpperCase());
+function makeType(cfg) {
+  const { name, base, subtype, allowDim, allowSubtype } = cfg;
 
   /** @type {import('@saltcorn/types/base_plugin').TypeAttribute[]} */
   const attributes = [
-    { name: 'srid', label: 'SRID', type: 'Integer', default: DEFAULT_SRID },
+    {
+      name: 'srid',
+      label: 'SRID',
+      type: 'Integer',
+      default: DEFAULT_SRID,
+    },
   ];
+
   if (allowDim) {
-    const { DIM_MODS } = require('../constants');
     attributes.push({
       name: 'dim',
       label: 'Dim',
@@ -45,7 +48,6 @@ function makeType(def) {
     });
   }
   if (allowSubtype) {
-    const { BASE_GEOM_TYPES } = require('../constants');
     attributes.push({
       name: 'subtype',
       label: 'Subtype',
@@ -54,19 +56,20 @@ function makeType(def) {
     });
   }
 
-  const fieldviews = { show: leafletShow() };
-  if (name === 'point') fieldviews.edit = leafletPointEditView(name);
-
-  return {
+  return Object.freeze({
     name,
     sql_name: sqlNameFactory(base, subtype),
-    description: `PostGIS ${label} value`,
+    description: `PostGIS ${subtype || base} value`,
     attributes,
     validate_attributes: validateAttrs,
-    fieldviews,
+    fieldviews: {
+      show: leafletShow(),
+      edit: leafletEditView(name),
+    },
     read: (v) => (typeof v === 'string' ? v : undefined),
+    /* Saltcorn 1.x expects text‑cast for display in lists */
     readFromDB: (v) => (typeof v === 'string' ? `${v}::text` : undefined),
-  };
+  });
 }
 
 module.exports = { makeType };
