@@ -67,7 +67,8 @@
 				"GitHub.copilot-chat",
 				"ZainChen.json",
 				"redhat.vscode-yaml",
-				"dbaeumer.vscode-eslint"
+				"dbaeumer.vscode-eslint",
+				"ms-azuretools.vscode-docker"
 			]
 		}
 	}
