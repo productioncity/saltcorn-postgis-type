@@ -5,7 +5,7 @@
  *
  * Author:       Troy Kelly <troy@team.production.city>
  * First‑created: 2024‑04‑17
- * This revision: 2025‑04‑18 – Extracted from monolithic index.js.
+ * This revision: 2025‑04‑19 – EWKT → GeoJSON now strips SRID and Z/M/ZM.
  * Licence:      CC0‑1.0  (see LICENCE)
  */
 
@@ -36,15 +36,32 @@ function wktToLonLat(wkt) {
 }
 
 /**
- * Convert any WKT or EWKT to GeoJSON (best‑effort) via `wellknown`.
+ * Convert WKT / EWKT to GeoJSON (best‑effort).
+ *
+ *  • Removes an `SRID=…;` prefix.  
+ *  • Removes `Z`, `M` or `ZM` dimensionality modifiers if the first parse
+ *    attempt fails – the `wellknown` package understands only 2‑D geometry.
  *
  * @param {string} wkt
  * @returns {Record<string, unknown>|undefined}
  */
 function wktToGeoJSON(wkt) {
-  if (typeof wkt !== 'string') return undefined;
+  if (typeof wkt !== 'string' || wkt.trim() === '') return undefined;
+
+  // 1. Normalise – strip SRID prefix and collapse whitespace.
+  let normalised = wkt.trim().replace(/^SRID=\d+;/i, '');
+
+  // 2. First parse attempt (fast‑path).
   try {
-    return wellknown.parse(wkt);
+    return wellknown.parse(normalised);
+  } catch {
+    /* fall‑through */
+  }
+
+  // 3. Retry after removing any Z/M/ZM modifier from the geometry keyword.
+  normalised = normalised.replace(/\b([A-Z]+)(?:ZM|Z|M)\b/, '$1');
+  try {
+    return wellknown.parse(normalised);
   } catch {
     return undefined;
   }
