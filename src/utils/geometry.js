@@ -19,6 +19,7 @@
 
 /* eslint-disable no-magic-numbers */
 
+const dbg = require('./debug');
 const wellknown = require('wellknown');
 let   wkx;                   // Lazy‑required – optional dependency.
 
@@ -48,7 +49,9 @@ const { DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
  * @returns {boolean}
  */
 function isLikelyHex(txt) {
-  return /^[0-9A-Fa-f]+$/.test(txt) && txt.length % 2 === 0;
+  const yes = /^[0-9A-Fa-f]+$/.test(txt) && txt.length % 2 === 0;
+  dbg.trace('isLikelyHex()', { sample: txt.slice(0, 16), yes });
+  return yes;
 }
 
 /**
@@ -59,7 +62,9 @@ function isLikelyHex(txt) {
  * @returns {string}
  */
 function stripPgCast(src) {
-  return src.replace(/::\w+$/u, '');
+  const out = src.replace(/::\w+$/u, '');
+  dbg.trace('stripPgCast()', { in: src, out });
+  return out;
 }
 
 /**
@@ -74,18 +79,24 @@ function stripPgCast(src) {
  *          : never}
  */
 function decodeHexWkb(hex, as) {
+  dbg.trace('decodeHexWkb()', { as, sample: hex.slice(0, 18) });
   if (!wkx || !isLikelyHex(hex)) return /** @type {never} */ (undefined);
   try {
     const geom = wkx.Geometry.parse(Buffer.from(hex, 'hex'));
 
     if (as === 'geojson') {
-      return /** @type {never} */ (geom.toGeoJSON());
+      const g = /** @type {never} */ (geom.toGeoJSON());
+      dbg.debug('decodeHexWkb() ➜ GeoJSON');
+      return g;
     }
 
     // as === 'wkt'
     const srid = geom.srid && geom.srid !== 0 ? `SRID=${geom.srid};` : '';
-    return /** @type {never} */ (`${srid}${geom.toWkt()}`);
-  } catch {
+    const wkt = /** @type {never} */ (`${srid}${geom.toWkt()}`);
+    dbg.debug('decodeHexWkb() ➜ WKT', wkt.slice(0, 32));
+    return wkt;
+  } catch (e) {
+    dbg.warn('decodeHexWkb() failed', e);
     return /** @type {never} */ (undefined);
   }
 }
@@ -99,6 +110,7 @@ function decodeHexWkb(hex, as) {
  * @returns {string|undefined}
  */
 function toWkt(value) {
+  dbg.trace('toWkt()', { value });
   if (typeof value !== 'string' || value.trim() === '') return undefined;
   const txt = stripPgCast(value.trim());
 
@@ -106,7 +118,9 @@ function toWkt(value) {
   if (/^(SRID=\d+;)?[A-Z]+/u.test(txt)) return txt;
 
   // 2. Hex‑encoded WKB?
-  return decodeHexWkb(txt, 'wkt');
+  const wkt = decodeHexWkb(txt, 'wkt');
+  dbg.trace('toWkt() result', wkt?.slice?.(0, 32));
+  return wkt;
 }
 
 /**
@@ -116,6 +130,7 @@ function toWkt(value) {
  * @returns {[number, number]|undefined}
  */
 function wktToLonLat(value) {
+  dbg.trace('wktToLonLat()', { value });
   const wkt = toWkt(value);
   if (!wkt) return undefined;
 
@@ -124,7 +139,9 @@ function wktToLonLat(value) {
     .match(
       /^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*/iu,
     );
-  return m ? [Number(m[1]), Number(m[2])] : undefined;
+  const out = m ? [Number(m[1]), Number(m[2])] : undefined;
+  dbg.trace('wktToLonLat() result', out);
+  return out;
 }
 
 /**
@@ -134,6 +151,7 @@ function wktToLonLat(value) {
  * @returns {Record<string, unknown>|undefined}
  */
 function wktToGeoJSON(value) {
+  dbg.trace('wktToGeoJSON()', { value });
   if (typeof value !== 'string' || value.trim() === '') return undefined;
 
   const txt = stripPgCast(value.trim());
@@ -153,6 +171,7 @@ function wktToGeoJSON(value) {
     try {
       return wellknown.parse(normalised);
     } catch {
+      dbg.warn('wktToGeoJSON() failed for', normalised.slice(0, 40));
       return undefined;
     }
   }
@@ -166,6 +185,7 @@ function wktToGeoJSON(value) {
  * @returns {true|string}
  */
 function validateAttrs(attrs) {
+  dbg.trace('validateAttrs()', attrs);
   if (!attrs) return true;
   if ('srid' in attrs && (!Number.isInteger(attrs.srid) || attrs.srid < 1)) {
     return 'SRID must be a positive integer';

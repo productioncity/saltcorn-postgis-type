@@ -20,6 +20,8 @@
 
 'use strict';
 
+const dbg = require('./debug');
+
 /**
  * Build the multifunction `sql_name`.
  *
@@ -29,6 +31,7 @@
  *   Callable object that **also** quacks like a normal string.
  */
 function sqlNameFactory(base, defaultSubtype) {
+  dbg.debug('sqlNameFactory()', { base, defaultSubtype });
   /* ------------------------------------------------------------------ */
   /* 1. Internal helper that produces the concrete SQL type string.     */
   /* ------------------------------------------------------------------ */
@@ -37,7 +40,6 @@ function sqlNameFactory(base, defaultSubtype) {
    * @returns {string}
    */
   function buildSql(attrs = {}) {
-    // Lazy‑load to avoid a require‑cycle.
     const { DEFAULT_SRID } = require('../constants');
 
     const srid = attrs.srid ?? DEFAULT_SRID;
@@ -45,11 +47,14 @@ function sqlNameFactory(base, defaultSubtype) {
     const sub  = ((attrs.subtype ?? defaultSubtype) + dim).toUpperCase();
 
     const baseLower = base.toLowerCase();
-    if (sub) return `${baseLower}(${sub},${srid})`;
-    if (srid !== undefined && srid !== null) {
-      return `${baseLower}(Geometry,${srid})`;
-    }
-    return baseLower;
+    const result =
+      sub ? `${baseLower}(${sub},${srid})` :
+      srid !== undefined && srid !== null
+        ? `${baseLower}(Geometry,${srid})`
+        : baseLower;
+
+    dbg.trace('buildSql()', { attrs, result });
+    return result;
   }
 
   /* ------------------------------------------------------------------ */
@@ -63,55 +68,35 @@ function sqlNameFactory(base, defaultSubtype) {
    *      • String‑like – sql_name[0], sql_name.includes('x'), …         *
    * ------------------------------------------------------------------ */
   const fnTarget = function proxyTarget(attrs) {
-    // NOTE: `this` context is irrelevant; simply delegate.
     return buildSql(attrs);
   };
 
   /* eslint-disable sonarjs/cognitive-complexity */
   const proxy = new Proxy(fnTarget, {
-    // Allow direct invocation:  sql_name(attrs)
     apply(_target, _thisArg, argArray) {
       return buildSql(...argArray);
     },
 
-    // Everything else – behave like a real string.
     get(_target, prop) {
-      // 3.1 Primitive coercion (e.g. `${sql_name}`)
-      if (prop === Symbol.toPrimitive) {
-        return () => canonical;
-      }
-
-      // 3.2 length – must be correct string length, not arity (1).
+      if (prop === Symbol.toPrimitive) return () => canonical;
       if (prop === 'length') return canonical.length;
-
-      // 3.3 Character index access        sql_name[0] ➜ 'g'
       if (typeof prop === 'string' && /^\d+$/.test(prop)) {
-        const idx = Number(prop);
-        return canonical[idx];
+        return canonical[Number(prop)];
       }
-
-      // 3.4 All standard String prototype methods (includes, indexOf, …)
       if (prop in String.prototype) {
-        // Bind the method to the canonical string value.
-        // @ts-ignore  – run‑time safe, we have just checked prop exists.
+        // @ts-ignore
         return String.prototype[prop].bind(canonical);
       }
-
-      // 3.5 Fallbacks: toString, valueOf, etc.
       switch (prop) {
         case 'toString':
         case 'valueOf':
           return () => canonical;
-
         default:
-          // Any uncommon property – defer to canonical string value.
-          // This provides correct behaviour for e.g. `sql_name.constructor`.
           // @ts-ignore
           return canonical[prop];
       }
     },
 
-    // Ensure `prop in sql_name` works correctly for indexes, 'length', etc.
     has(_target, prop) {
       if (prop === 'length') return true;
       if (prop in String.prototype) return true;
@@ -121,7 +106,6 @@ function sqlNameFactory(base, defaultSubtype) {
       return false;
     },
 
-    // Prevent accidental mutation – keep behaviour read‑only.
     set() {
       return false;
     },

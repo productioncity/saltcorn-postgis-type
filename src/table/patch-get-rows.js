@@ -17,6 +17,7 @@
 
 'use strict';
 
+const dbg = require('../utils/debug');
 const { toWkt, wktToLonLat } = require('../utils/geometry');
 
 /** List of PostGIS type‑names handled by this plug‑in. */
@@ -46,12 +47,17 @@ const PGIS_TYPES = new Set([
  * @returns {void}
  */
 function patchGetRows(TableClass) {
-  if (TableClass.prototype.getRows.__postgisPatched) return;
+  if (TableClass.prototype.getRows.__postgisPatched) {
+    dbg.debug('Table.getRows already patched – skipping.');
+    return;
+  }
 
+  dbg.info('Patching Table.getRows() for PostGIS support.');
   const original = TableClass.prototype.getRows;
 
   // eslint-disable-next-line func-names
   TableClass.prototype.getRows = async function patched(...args) {
+    dbg.trace('getRows() intercepted', { args });
     /** @type {Array<Record<string, unknown>>} */
     const rows = await original.apply(this, args);
 
@@ -68,7 +74,10 @@ function patchGetRows(TableClass) {
       /* 1. Normalise EVERY PostGIS field to EWKT. */
       for (const pc of pgisCols) {
         const ewkt = toWkt(row[pc.name]);
-        if (ewkt) row[pc.name] = ewkt;
+        if (ewkt) {
+          row[pc.name] = ewkt;
+          dbg.trace('Row normalised', { field: pc.name, ewkt: ewkt.slice(0, 32) });
+        }
       }
 
       /* 2. Add <name>_lat / <name>_lng for Point fields. */
@@ -77,6 +86,7 @@ function patchGetRows(TableClass) {
         if (ll) {
           row[`${p.name}_lat`] = ll[1]; // latitude
           row[`${p.name}_lng`] = ll[0]; // longitude
+          dbg.trace('LatLng virtual props added', { field: p.name, ll });
         }
       }
     }

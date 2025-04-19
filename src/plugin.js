@@ -11,6 +11,7 @@
 
 /* eslint-disable camelcase */
 
+const dbg = require('./utils/debug');
 const { types } = require('./types/catalogue');
 const { patchGetRows } = require('./table/patch-get-rows');
 const { wktToLonLat } = require('./utils/geometry');
@@ -40,12 +41,20 @@ const createLatLngColumnsAction = {
    * @returns {Promise<{success?:string,error?:string}>}
    */
   async run({ table_id }) {
+    dbg.info('Action:create_point_latlng_columns invoked', { table_id });
     const tbl = await Table.findOne({ id: table_id });
-    if (!tbl) return { error: 'Table not found.' };
+    if (!tbl) {
+      dbg.warn('Table not found – aborting.');
+      return { error: 'Table not found.' };
+    }
 
-    const pointField = (await tbl.getFields())
-      .find((f) => f.type?.name === 'point');
-    if (!pointField) return { error: 'No point field detected.' };
+    const pointField = (await tbl.getFields()).find(
+      (f) => f.type?.name === 'point',
+    );
+    if (!pointField) {
+      dbg.warn('No point field detected – aborting.');
+      return { error: 'No point field detected.' };
+    }
 
     const base = pointField.name;
     const lat = await Field.create({
@@ -67,7 +76,9 @@ const createLatLngColumnsAction = {
 
     /* Force Saltcorn to refresh calculated column cache */
     await tbl.update({ min_role_read: tbl.min_role_read });
-    return { success: `Created columns #${lat.id} and #${lng.id}.` };
+    const msg = `Created columns #${lat.id} and #${lng.id}.`;
+    dbg.info(msg);
+    return { success: msg };
   },
 };
 
@@ -91,13 +102,18 @@ module.exports = {
    * @returns {void}
    */
   onLoad() {
+    dbg.debug('Plug‑in onLoad()', { timestamp: new Date().toISOString() });
     let T = require('@saltcorn/data/models/table');
     if (T && T.Table) T = T.Table;
-    if (T && T.prototype) patchGetRows(T);
-    else /* eslint-disable-next-line no-console */
+    if (T && T.prototype) {
+      patchGetRows(T);
+      dbg.info('Table.getRows successfully patched.');
+    } else {
+      /* eslint-disable-next-line no-console */
       console.error(
         'saltcorn-postgis-type: Unable to patch Table.getRows – Table class not found',
       );
+    }
   },
 
   types,
@@ -113,6 +129,7 @@ module.exports = {
      * @returns {{lat:number,lng:number,latlng:[number,number]}|undefined}
      */
     toLatLng(wkt) {
+      dbg.trace('functions.toLatLng()', wkt);
       const ll = wktToLonLat(wkt);
       return ll ? { lat: ll[1], lng: ll[0], latlng: ll } : undefined;
     },

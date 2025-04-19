@@ -11,6 +11,7 @@
 
 'use strict';
 
+const dbg = require('../utils/debug');
 const { DEFAULT_SRID, DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
 const { sqlNameFactory } = require('../utils/sql-name');
 const { validateAttrs } = require('../utils/geometry');
@@ -29,6 +30,7 @@ const { rawView } = require('../leaflet/raw-view');
  * @returns {import('@saltcorn/types').Type}
  */
 function makeType(cfg) {
+  dbg.debug('makeType()', cfg);
   const { name, base, subtype, allowDim, allowSubtype } = cfg;
 
   /** @type {import('@saltcorn/types/base_plugin').TypeAttribute[]} */
@@ -55,18 +57,11 @@ function makeType(cfg) {
   /* ------------------------------------------------------------------ */
   /* Field‑views                                                        */
   /* ------------------------------------------------------------------ */
-  /* We derive two variants from the same Leaflet component:            *
-   *   • “map”  – read‑only, offered in Show/List builders.             *
-   *   • “edit” – editable, offered in Edit/New builders.               */
   const baseMapFV = mapEditView();
-
-  /** Read‑only map view (isEdit=false) */
-  const mapFV = { ...baseMapFV, name: 'map', isEdit: false };
-
-  /** Editing variant (isEdit=true) */
+  const mapFV  = { ...baseMapFV, name: 'map',  isEdit: false };
   const editFV = { ...baseMapFV, name: 'edit', isEdit: true };
 
-  return Object.freeze({
+  const typeObj = Object.freeze({
     name,
     sql_name: sqlNameFactory(base, subtype),
     description: `PostGIS ${subtype || base} value`,
@@ -79,10 +74,11 @@ function makeType(cfg) {
       show: showView(),
     },
     read: (v) => (typeof v === 'string' ? v : undefined),
-
-    /* Ensure Postgres returns text *in EWKT format*, not hex WKB. */
     readFromDB: (v) => `ST_AsEWKT(${v})`,
   });
+
+  dbg.info(`Type registered: ${name}`);
+  return typeObj;
 }
 
 module.exports = { makeType };

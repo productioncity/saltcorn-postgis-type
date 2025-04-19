@@ -72,7 +72,6 @@ services:
       - POSTGRES_USER=saltcorn
       - POSTGRES_PORT=5432
       - PGDATA=/var/lib/postgresql/data/pgdata
-      - PGADMIN=/var/lib/postgresql/data/pgadmin
       - PGPASSFILE=/root/.pgpass
       - POSTGRES_SYNCHRONOUS_COMMIT=on
       - TZ=${TZ:-Australia/Sydney}
@@ -140,11 +139,11 @@ services:
       - PGADMIN_CONFIG_PROXY_X_PORT_COUNT=1
       - PGADMIN_CONFIG_PROXY_X_PREFIX_COUNT=1
       - PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION=True
-      - PGADMIN_CONFIG_SESSION_DB_PATH="/data/pgadmin/sessions"
-      - PGADMIN_CONFIG_SQLITE_PATH="/data/pgadmin/pgadmin4.db"
-      - PGADMIN_SERVER_JSON_FILE="/data/pgadmin/servers.json"
-      - PGADMIN_PREFERENCES_JSON_FILE="/data/pgadmin/preferences.json"
-      #- PGADMIN_CONFIG_DATA_DIR=/data/pgadmin
+      - PGADMIN_CONFIG_SESSION_DB_PATH="/data/sessions"
+      - PGADMIN_CONFIG_SQLITE_PATH="/data/pgadmin4.db"
+      - PGADMIN_SERVER_JSON_FILE="/data/servers.json"
+      - PGADMIN_PREFERENCES_JSON_FILE="/data/preferences.json"
+      #- PGADMIN_CONFIG_DATA_DIR=/data
       - TZ=${TZ:-Australia/Sydney}
     volumes:
       - "/etc/timezone:/etc/timezone:ro"
