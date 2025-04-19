@@ -109,7 +109,7 @@ function mapEditView(expectedType = '') {
 ${String(function scParsePoint(wkt) {
   if (typeof wkt !== 'string') return null;
   wkt = wkt.replace(/^SRID=.*?;/i, '');
-  const m = wkt.match(/^POINT\\s*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)\\s*/i);
+  const m = wkt.match(/^POINT\\s*\\([^()]*\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)\\s*/i);
   return m ? [Number(m[2]), Number(m[1])] : null;
 })}
 
