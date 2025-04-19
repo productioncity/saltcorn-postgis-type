@@ -2,16 +2,17 @@
  * map-edit-view.js
  * -----------------------------------------------------------------------------
  * Field‑view “edit” – interactive Leaflet editor that **guarantees** the WKT
- * sent back to Saltcorn matches the column’s SQL type:
- *   • geometrycollection → GEOMETRYCOLLECTION( … )
- *   • multipolygon       → MULTIPOLYGON( … )
- *   • multilinestring    → MULTILINESTRING( … )
- *   • multipoint         → MULTIPOINT( … )
- *   • everything else    → single geometry or GEOMETRYCOLLECTION
+ * sent back to Saltcorn matches the column’s SQL type.
  *
- * Author:   Troy Kelly  <troy@team.production.city>
- * Updated:  2025‑04‑20
- * Licence:  CC0‑1.0
+ * It now honours the column’s runtime `attrs.subtype` so a generic **geometry**
+ * or **geography** field whose subtype has been set in the Saltcorn admin
+ * interface (e.g. `GeometryCollection`, `MultiPolygon`, …) receives output of
+ * the correct *concrete* geometry type. This fixes the
+ * “Geometry type (Polygon) does not match column type (GeometryCollection)”
+ * error reported when saving rows that contain a single feature.
+ *
+ * Author:  Troy Kelly <troy@team.production.city>
+ * Licence: CC0‑1.0
  */
 
 'use strict';
@@ -65,10 +66,10 @@ function unpackArgs(args) {
 /**
  * Builds the Leaflet edit view for any PostGIS type.
  *
- * @param {string} expectedType  Saltcorn type name in lower case.
+ * @param {string} fallbackType  Saltcorn base‑type name in lower case.
  * @returns {import('@saltcorn/types').FieldView}
  */
-function mapEditView(expectedType = '') {
+function mapEditView(fallbackType = '') {
   return {
     name: 'edit',
     isEdit: true,
@@ -79,6 +80,16 @@ function mapEditView(expectedType = '') {
       /* ───── 1. Args & IDs ──────────────────────────────────────── */
       const { name: fieldName, value: current, attrs = {}, cls = '' } =
         unpackArgs(arguments);
+
+      /* ------------------------------------------------------------------ */
+      /* Resolve the concrete geometry type expected by the column.         *
+       *  – If the column is a generic “geometry”/“geography” but the user   *
+       *    selected a *subtype* in the Saltcorn UI, we must emit that.      *
+       *  – Otherwise fall back to the base type supplied by the factory.    */
+      /* ------------------------------------------------------------------ */
+      const expectType = String(
+        (attrs.subtype && `${attrs.subtype}`.toLowerCase()) || fallbackType,
+      ).toLowerCase();
 
       const mapId   = `map_${Math.random().toString(36).slice(2)}`;
       const inputId = `inp_${mapId}`;
@@ -110,7 +121,7 @@ ${String(function scParsePoint(wkt) {
   /* Extract [lat,lng] from a POINT WKT/EWKT string. */
   if (typeof wkt !== 'string') return null;
   wkt = wkt.replace(/^SRID=.*?;/i, '');
-  const m = wkt.match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*/i);
+  const m = wkt.match(/^POINT[^()]*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)\\s*/i);
   return m ? [Number(m[2]), Number(m[1])] : null;
 })}
 
@@ -147,9 +158,9 @@ ${String(function scParsePoint(wkt) {
 
     /* ---- Load existing WKT -------------------------------------- */
     try{
-      const init = hidden.value.trim();
+      const init = hidden.value.trim().replace(/^SRID=\\d+;/i,'');
       if(init){
-        const gj = window.wellknown.parse(init.replace(/^SRID=\\d+;/i,''));
+        const gj = window.wellknown.parse(init);
         const lyr = L.geoJSON(gj).addTo(fg);
         map.fitBounds(lyr.getBounds(),{maxZoom:14});
       }
@@ -162,7 +173,7 @@ ${String(function scParsePoint(wkt) {
     }));
 
     /* ---- Serialiser – type aware -------------------------------- */
-    const EXPECT = ${JSON.stringify(expectedType)};
+    const EXPECT = ${JSON.stringify(expectType)};
 
     function buildMulti(t){
       const coords = fg.toGeoJSON().features.map(f=>f.geometry.coordinates);
