@@ -10,6 +10,12 @@
  *     “Unterminated group” SyntaxError under Node.  
  *   • Regex unit‑tested against POINT and EWKT variants.
  *
+ * 2025‑04‑21 – bug‑fix #48  
+ *   • Z‑dimension supplied in the form was ignored → PostGIS rejected the
+ *     row (*“Column has Z dimension but geometry does not”*).  The Z value is
+ *     now injected into every coordinate and the resulting WKT gains the
+ *     proper dimensional flag (“… Z (”).
+ *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
  */
@@ -92,6 +98,15 @@ function mapEditView(fallbackType = '') {
       const wantZ   = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(current);
       const zId     = wantZ ? `z_${mapId}` : null;
 
+      /* Extract an existing Z value if one is present, else 0 */
+      let initialZ = 0;
+      if (wantZ) {
+        const m = current.match(
+          /\(\s*[+-]?\d+(?:\.\d+)?\s+[+-]?\d+(?:\.\d+)?\s+([+-]?\d+(?:\.\d+)?)/,
+        );
+        if (m) initialZ = Number(m[1]);
+      }
+
       const { lat, lng, zoom } = DEFAULT_CENTER;
 
       /* ──────────────── 2. Mark‑up payload ─────────────────────── */
@@ -104,7 +119,8 @@ function mapEditView(fallbackType = '') {
       ? `<div class="mt-1">
            <label for="${zId}" class="form-label mb-0">Z&nbsp;value</label>
            <input type="number" id="${zId}"
-                  class="form-control form-control-sm" step="any">
+                  class="form-control form-control-sm" step="any"
+                  value="${initialZ}">
          </div>`
       : ''
   }
@@ -118,7 +134,7 @@ ${String(function scParsePoint(wkt) {
    */
   if (typeof wkt !== 'string') return null;
   wkt = wkt.replace(/^SRID=.*?;/i, '');
-  const m = wkt.match(/^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)/i);
+  const m = wkt.match(/^POINT[^()]*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s+([+-]?\\d+(?:\\.\\d+)?)/i);
   return m ? [Number(m[2]), Number(m[1])] : null; // [lat, lng]
 })}
 
@@ -149,6 +165,38 @@ ${String(function scParsePoint(wkt) {
     const hidden = document.getElementById(${JSON.stringify(inputId)});
     if(!mapEl || !hidden || !window.L || !window.L.Draw) return;
 
+    const WANT_Z = ${wantZ};
+    const Z_ID   = ${JSON.stringify(zId)};
+
+    /* ---------- 4.0. Z helpers ---------------------- */
+    function currentZ(){
+      if(!WANT_Z) return undefined;
+      const zEl=document.getElementById(Z_ID);
+      return zEl ? parseFloat(zEl.value||'0') : 0;
+    }
+
+    function addZCoords(coords, z){
+      if(typeof coords[0]==='number'){
+        if(coords.length===2) coords.push(z);
+        else coords[2]=z;
+        return coords;
+      }
+      return coords.map(c=>addZCoords(c,z));
+    }
+
+    function withZ(geom){
+      if(!WANT_Z) return geom;
+      const z=currentZ();
+      const g=JSON.parse(JSON.stringify(geom)); // deep clone
+      if(g.type==='GeometryCollection' && Array.isArray(g.geometries)){
+        g.geometries=g.geometries.map(withZ);
+        return g;
+      }
+      if('coordinates' in g) g.coordinates=addZCoords(g.coordinates, z);
+      return g;
+    }
+
+    /* ---------- 4.1. Base map ----------------------- */
     const map = L.map(mapEl).setView([${lat}, ${lng}], ${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
       attribution:'&copy; OpenStreetMap contributors'
@@ -156,9 +204,9 @@ ${String(function scParsePoint(wkt) {
 
     const fg = new L.FeatureGroup().addTo(map);
 
-    /* ---------- 4.1. Load existing geometry ---------- */
+    /* ---------- 4.2. Load existing geometry ---------- */
     try{
-      const init = hidden.value.trim().replace(/^SRID=\d+;/i,'');
+      const init = hidden.value.trim().replace(/^SRID=\\d+;/i,'');
       if(init){
         const gj  = window.wellknown.parse(init);
         const lyr = L.geoJSON(gj).addTo(fg);
@@ -166,7 +214,7 @@ ${String(function scParsePoint(wkt) {
       }
     }catch(e){ /* ignore parse errors */ }
 
-    /* ---------- 4.2. Draw toolbar -------------------- */
+    /* ---------- 4.3. Draw toolbar -------------------- */
     map.addControl(new L.Control.Draw({
       edit:{ featureGroup: fg },
       draw:{
@@ -176,11 +224,11 @@ ${String(function scParsePoint(wkt) {
       }
     }));
 
-    /* ---------- 4.3. Serialiser – type aware --------- */
+    /* ---------- 4.4. Serialiser – type aware --------- */
     const EXPECT = ${JSON.stringify(expectType)};
 
     function buildMulti(t){
-      const coords = fg.toGeoJSON().features.map(f=>f.geometry.coordinates);
+      const coords = fg.toGeoJSON().features.map(f=>withZ(f.geometry).coordinates);
       const type   = { multipoint:'MultiPoint',
                        multilinestring:'MultiLineString',
                        multipolygon:'MultiPolygon' }[t];
@@ -192,8 +240,8 @@ ${String(function scParsePoint(wkt) {
       if(!gj.features.length) return '';
 
       if(EXPECT==='geometrycollection'){
-        return 'GEOMETRYCOLLECTION('+
-               gj.features.map(f=>window.wellknown.stringify(f.geometry)).join(',')+
+        return (WANT_Z?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
+               gj.features.map(f=>window.wellknown.stringify(withZ(f.geometry))).join(',')+
                ')';
       }
 
@@ -201,11 +249,11 @@ ${String(function scParsePoint(wkt) {
         return buildMulti(EXPECT);
 
       if(gj.features.length===1)
-        return window.wellknown.stringify(gj.features[0].geometry);
+        return window.wellknown.stringify(withZ(gj.features[0].geometry));
 
       /* Default – multiple features but non‑collection column */
-      return 'GEOMETRYCOLLECTION('+
-             gj.features.map(f=>window.wellknown.stringify(f.geometry)).join(',')+
+      return (WANT_Z?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
+             gj.features.map(f=>window.wellknown.stringify(withZ(f.geometry))).join(',')+
              ')';
     }
 
@@ -214,6 +262,11 @@ ${String(function scParsePoint(wkt) {
     map.on(L.Draw.Event.CREATED,  e=>{fg.addLayer(e.layer); sync();});
     map.on(L.Draw.Event.EDITED,  sync);
     map.on(L.Draw.Event.DELETED, sync);
+
+    if(WANT_Z){
+      const zEl=document.getElementById(Z_ID);
+      if(zEl) zEl.addEventListener('change',sync);
+    }
   }
 })();
 </script>`;
