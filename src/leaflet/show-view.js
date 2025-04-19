@@ -20,10 +20,33 @@ function showView() {
     name: 'show',
     isEdit: false,
     /**
-     * @param {{value?: string}} param
+     * Saltcorn sometimes calls field‑views with a primitive value
+     * (the actual string) and other times with an object `{ value }`.
+     * Accept both forms.
+     *
+     * @param {...unknown} args
      * @returns {string}
      */
-    run({ value = '' }) {
+    run(...args) {
+      /* -------------------------------------------------------------- *
+       * 1.  Resolve the correct `value` regardless of call signature.  *
+       * -------------------------------------------------------------- */
+      let value = '';
+      if (args.length) {
+        const first = args[0];
+        /* Object form: { value: '…' } */
+        if (first && typeof first === 'object' && 'value' in first) {
+          // @ts-ignore – runtime shape check
+          value = first.value ?? '';
+        } else if (typeof first === 'string') {
+          /* Primitive form: '…' */
+          value = first;
+        }
+      }
+
+      /* -------------------------------------------------------------- *
+       * 2.  Build the Leaflet viewer.                                  *
+       * -------------------------------------------------------------- */
       const mapId = `show_${Math.random().toString(36).slice(2)}`;
       const gj    = wktToGeoJSON(value);
       const { lat, lng, zoom } = DEFAULT_CENTER;
