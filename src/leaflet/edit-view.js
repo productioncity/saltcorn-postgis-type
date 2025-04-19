@@ -25,20 +25,21 @@ const { DEFAULT_CENTER } = require('../constants');
 const { textEditView } = require('./text-edit-view');
 
 /**
- * HTML‑escapes a string for safe attribute insertion.
+ * HTML‑escapes a string so it is safe inside attribute quotes.
  *
- * @param {string} s
+ * @param {string|number} s
  * @returns {string}
  */
 function escAttr(s) {
-  return String(s).replace(/&/g, '&amp;')
+  return String(s)
+    .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
 
 /**
- * Parse an EWKT/WKT POINT (optionally Z/M/ZM) into its components.
+ * Parse an EWKT/WKT POINT (optionally Z/M/ZM) into discrete parts.
  *
  * @param {string|undefined|null} wkt
  * @returns {{
@@ -54,8 +55,10 @@ function parsePointWkt(wkt) {
   if (typeof wkt !== 'string') return { dim: '' };
 
   /* eslint-disable max-len */
-  const rx = /^\s*(?:SRID=(\d+);)?\s*POINT(ZM|Z|M)?\s*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*(?:([+-]?\d+(?:\.\d+)?))?\s*(?:([+-]?\d+(?:\.\d+)?))?\s*\)\s*$/i;
+  const rx =
+    /^\s*(?:SRID=(\d+);)?\s*POINT(ZM|Z|M)?\s*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*(?:([+-]?\d+(?:\.\d+)?))?\s*(?:([+-]?\d+(?:\.\d+)?))?\s*\)\s*$/i;
   /* eslint-enable max-len */
+
   const m = wkt.match(rx);
   if (!m) return { dim: '' };
 
@@ -67,7 +70,8 @@ function parsePointWkt(wkt) {
   /** @type {{z?:number,m?:number}} */
   const extra = {};
   if (dim === 'Z') extra.z = c3str === undefined ? undefined : Number(c3str);
-  else if (dim === 'M') extra.m = c3str === undefined ? undefined : Number(c3str);
+  else if (dim === 'M')
+    extra.m = c3str === undefined ? undefined : Number(c3str);
   else if (dim === 'ZM') {
     extra.z = c3str === undefined ? undefined : Number(c3str);
     extra.m = c4str === undefined ? undefined : Number(c4str);
@@ -83,7 +87,7 @@ function parsePointWkt(wkt) {
 }
 
 /**
- * Build an EWKT/WKT string from discrete parts.
+ * Compose an EWKT/WKT POINT string from discrete parts.
  *
  * @param {object} o
  * @param {number|undefined} o.srid
@@ -107,57 +111,56 @@ function buildPointWkt({ srid, dim, lng, lat, z, m }) {
 /* ───────────────────── Field‑view factory ───────────────────── */
 
 /**
- * Factory returning a Saltcorn “edit” field‑view. For non‑POINT geometries we
- * return the bundled plain‑text editor to preserve behaviour.
+ * Returns the Leaflet‑based “edit” field‑view for points, or the plain‑text
+ * editor for every other geometry type.
  *
  * @param {string} typeName  The PostGIS sub‑type (“point”, “polygon” …).
  * @returns {import('@saltcorn/types').FieldView}
  */
 function leafletEditView(typeName) {
-  /* Fallback for non‑POINT geometries */
+  /* All non‑point geometries keep the original raw editor */
   if (typeName !== 'point') {
     return textEditView();
   }
 
   /**
-   * Saltcorn calls this `run` method to obtain the HTML fragment.
+   * Saltcorn calls `run` during form rendering.
    *
-   * @param {string} fieldName                   Database column name.
-   * @param {string|undefined|null} fieldValue   Current WKT/EWKT value.
-   * @param {import('../types').PostGISTypeAttrs} attrs  Field attributes.
-   * @param {string} cls                         Extra CSS classes.
-   * @returns {string}                           Raw HTML.
+   * @param {string} fieldName
+   * @param {string|undefined|null} fieldValue
+   * @param {import('../types').PostGISTypeAttrs} attrs
+   * @param {string} cls   – Extra CSS classes from Saltcorn
+   * @returns {import('@saltcorn/markup').TrustedString}
    */
   function run(fieldName, fieldValue, attrs = {}, cls = '') {
-    const {
-      srid: cfgSrid = attrs.srid,
-      dim:  dimCfg  = attrs.dim ? String(attrs.dim).toUpperCase() : '',
-    } = {};
+    /* Determine field‑level defaults */
+    const cfgSrid = attrs.srid;
+    const dimCfg = attrs.dim ? String(attrs.dim).toUpperCase() : '';
 
-    /* Parse current value (if any) */
+    /* Parse existing value (if any) */
     const parsed = parsePointWkt(fieldValue);
-    const dim    = parsed.dim || dimCfg || '';
-    const srid   = parsed.srid ?? cfgSrid;
+    const dim = parsed.dim || dimCfg || '';
+    const srid = parsed.srid ?? cfgSrid;
 
-    /* Determine initial coordinates */
+    /* Initial coordinates */
     const lat = parsed.lat ?? DEFAULT_CENTER.lat;
     const lng = parsed.lng ?? DEFAULT_CENTER.lng;
-    const z   = parsed.z;
-    const m   = parsed.m;
+    const z = parsed.z;
+    const m = parsed.m;
 
-    /* Build IDs that are safe for use in the DOM */
+    /* DOM‑safe IDs */
     const safeId = `sc_pg_${fieldName.replace(/[^A-Za-z0-9_]/g, '_')}`;
-    const mapId  = `${safeId}_map`;
-    const zId    = `${safeId}_z`;
-    const mId    = `${safeId}_m`;
-    const hidId  = safeId; // hidden <input> uses the canonical id
+    const mapId = `${safeId}_map`;
+    const zId = `${safeId}_z`;
+    const mId = `${safeId}_m`;
+    const hidId = safeId; // hidden <input>
 
-    /* Initial WKT (so form re‑submit without modification works) */
+    /* Initial hidden value so form re‑submit works untouched */
     const initialWkt = escAttr(
       buildPointWkt({ srid, dim, lng, lat, z, m }),
     );
 
-    /* Extra ordinate inputs (Z/M) */
+    /* Extra ordinate inputs if required */
     const zInputHtml = dim.includes('Z')
       ? `<input type="number" step="any" inputmode="decimal"
                 class="form-control ${cls}"
@@ -177,7 +180,7 @@ function leafletEditView(typeName) {
         ? `<div class="d-flex gap-2 mt-2">${zInputHtml}${mInputHtml}</div>`
         : '';
 
-    /* Front‑end initialisation script – runs once DOM + Leaflet are ready */
+    /* Client‑side initialisation */
     const initScript = `
 <script>
 (function initLeafletPointEditor(){
@@ -187,12 +190,12 @@ function leafletEditView(typeName) {
   };
 
   waitForLeaflet(() => {
-    const mapEl   = document.getElementById(${JSON.stringify(mapId)});
-    const hidden  = document.getElementById(${JSON.stringify(hidId)});
+    const mapEl  = document.getElementById(${JSON.stringify(mapId)});
+    const hidden = document.getElementById(${JSON.stringify(hidId)});
     ${dim.includes('Z') ? `const zIn = document.getElementById(${JSON.stringify(zId)});` : ''}
     ${dim.includes('M') ? `const mIn = document.getElementById(${JSON.stringify(mId)});` : ''}
 
-    /* Create Leaflet map */
+    /* Leaflet map */
     const map = L.map(mapEl).setView([${lat}, ${lng}], ${DEFAULT_CENTER.zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
@@ -202,39 +205,40 @@ function leafletEditView(typeName) {
     /* Draggable marker */
     const marker = L.marker([${lat}, ${lng}], { draggable: true }).addTo(map);
 
-    /* Compose WKT/EWKT from current UI state */
+    /* Compose WKT/EWKT */
     const updateHidden = () => {
       const ll = marker.getLatLng();
       const parts = [ll.lng, ll.lat];
       ${dim.includes('Z') ? 'parts.push(parseFloat(zIn.value) || 0);' : ''}
-      ${dim.includes('M')
-        ? `parts.push(parseFloat(mIn.value) || 0);`
-        : ''}
+      ${dim.includes('M') ? 'parts.push(parseFloat(mIn.value) || 0);' : ''}
       const coordStr = parts.join(' ');
       let wkt = 'POINT${dim}(' + coordStr + ')';
       ${srid !== undefined && srid !== null ? `wkt = 'SRID=${srid};' + wkt;` : ''}
       hidden.value = wkt;
     };
 
-    /* Wire‑up change events */
+    /* Event wiring */
     marker.on('drag', updateHidden);
     ${dim.includes('Z') ? 'zIn.addEventListener("input", updateHidden);' : ''}
     ${dim.includes('M') ? 'mIn.addEventListener("input", updateHidden);' : ''}
 
-    /* Initial populate */
+    /* First populate */
     updateHidden();
   });
 })();
 </script>`;
 
-    /* Final combined HTML */
-    return `
+    /* Full HTML fragment */
+    const html = `
 <input type="hidden" id="${hidId}" name="${escAttr(fieldName)}"
        value="${initialWkt}">
 <div id="${mapId}" class="mb-2"
      style="height:300px;min-height:300px;border:1px solid #ced4da;"></div>
 ${extraInputsHtml}
 ${initScript}`;
+
+    /* Mark as trusted so Saltcorn keeps the <script> tag */
+    return markup.trust(html);
   }
 
   return {
