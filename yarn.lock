@@ -185,6 +185,7 @@ __metadata:
     "@saltcorn/markup": "npm:^1.1.3"
     "@saltcorn/types": "npm:^1.1.4-beta.9"
     wellknown: "npm:^0.5.0"
+    wkx: "npm:^0.5.0"
   languageName: unknown
   linkType: soft
 
@@ -5832,6 +5833,15 @@ __metadata:
   dependencies:
     string-width: "npm:^1.0.2 || 2 || 3 || 4"
   checksum: 10c0/1d9c2a3e36dfb09832f38e2e699c367ef190f96b82c71f809bc0822c306f5379df87bab47bed27ea99106d86447e50eb972d3c516c2f95782807a9d082fbea95
+  languageName: node
+  linkType: hard
+
+"wkx@npm:^0.5.0":
+  version: 0.5.0
+  resolution: "wkx@npm:0.5.0"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10c0/9f787ffd2bc83708000f10165a72f0ca121b2e79b279eb44f2f5274eaa6ef819d9e9a00058a3b59dd211fe140d4b47cb6d49683b3a57a2a42ab3a7ccd52247dd
   languageName: node
   linkType: hard
 

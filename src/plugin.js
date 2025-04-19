@@ -17,7 +17,7 @@ const { wktToLonLat } = require('./utils/geometry');
 const { LEAFLET } = require('./constants');
 
 const TableMod = require('@saltcorn/data/models/table');
-const Field    = require('@saltcorn/data/models/field');
+const Field = require('@saltcorn/data/models/field');
 
 /* Resolve Table class across Saltcorn 0.x / 1.x variants */
 const Table =
@@ -50,17 +50,17 @@ const createLatLngColumnsAction = {
     const base = pointField.name;
     const lat = await Field.create({
       table_id,
-      name:  `${base}_lat`,
+      name: `${base}_lat`,
       label: `${base} latitude`,
-      type:  'Float',
+      type: 'Float',
       calculated: true,
       expression: `ST_Y("${base}")`,
     });
     const lng = await Field.create({
       table_id,
-      name:  `${base}_lng`,
+      name: `${base}_lng`,
       label: `${base} longitude`,
-      type:  'Float',
+      type: 'Float',
       calculated: true,
       expression: `ST_X("${base}")`,
     });
@@ -79,7 +79,7 @@ module.exports = {
 
   /* Inject local Leaflet assets so they are always web‑served */
   headers: [
-    { css:    LEAFLET.css },
+    { css: LEAFLET.css },
     { script: LEAFLET.js },
   ],
 
@@ -119,5 +119,5 @@ module.exports = {
   },
 
   /* Run‑time dependencies (for Saltcorn store UI) */
-  dependencies: ['wellknown'],
+  dependencies: ['wellknown', 'wkx'],
 };

@@ -12,6 +12,13 @@
 /* eslint-disable max-len */
 
 /**
+ * Should we output debug information.
+ * @type {boolean}
+ */
+const PLUGIN_DEBUG = true;
+
+
+/**
  * NPM package / plug‑in slug – used for building public URLs.
  * @type {string}
  */
@@ -45,8 +52,8 @@ const BASE_GEOM_TYPES = Object.freeze([
  * @type {{lat:number,lng:number,zoom:number}}
  */
 const DEFAULT_CENTER = Object.freeze({
-  lat:  -33.8688,
-  lng:  151.2093,
+  lat: -33.8688,
+  lng: 151.2093,
   zoom: 12,
 });
 
@@ -63,7 +70,7 @@ const DEFAULT_CENTER = Object.freeze({
 /** @type {LeafletStatic} */
 const LEAFLET = Object.freeze({
   css: `/plugins/public/${PLUGIN_SLUG}/leaflet.css`,
-  js:  `/plugins/public/${PLUGIN_SLUG}/leaflet.js`,
+  js: `/plugins/public/${PLUGIN_SLUG}/leaflet.js`,
   /**
    * Returns HTML that loads Leaflet only if `window.L` is not already defined.
    *
@@ -79,6 +86,7 @@ const LEAFLET = Object.freeze({
 });
 
 module.exports = {
+  PLUGIN_DEBUG,
   PLUGIN_SLUG,
   DEFAULT_SRID,
   DIM_MODS,
