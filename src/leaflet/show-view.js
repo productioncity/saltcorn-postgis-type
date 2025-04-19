@@ -1,7 +1,7 @@
 /**
  * show-view.js
  * ----------------------------------------------------------------------------
- * Read‑only Leaflet viewer.
+ * Read‑only Leaflet viewer (robust against every Saltcorn call signature).
  *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0‑1.0
@@ -12,58 +12,68 @@
 const { DEFAULT_CENTER, LEAFLET } = require('../constants');
 const { wktToGeoJSON }            = require('../utils/geometry');
 
+/* ────────────────────────── helpers ────────────────────────── */
+
 /**
- * Extract the geometry value regardless of the Saltcorn call signature.
+ * Identify a string that *looks* like geometry (WKT/EWKT/hex‑WKB).
  *
- * @param {IArguments | unknown[]} args
- * @returns {string}
+ * @param {string} s
+ * @returns {boolean}
+ */
+function looksLikeGeom(s) {
+  return (
+    /^(SRID=\d+;)?[A-Z]/.test(s) ||            // WKT / EWKT
+    /^[0-9A-Fa-f]{16,}$/.test(s)               // hex‑encoded WKB
+  );
+}
+
+/**
+ * Extract the geometry string from **any** Saltcorn runtime signature.
+ *
+ * Saltcorn’s field‑view `run()` is not documented and changes between
+ * versions.  Rather than rely on brittle positional logic we scan every
+ * argument for the first plausible geometry string.
+ *
+ * @param {unknown[]} args
+ * @returns {string} Empty string if nothing usable found.
  */
 function resolveValue(args) {
-  if (!args.length) return '';
-
-  const first = args[0];
-
-  /* ───── (1) Object wrapper `{ value }` ──────────────────────────── */
-  if (first && typeof first === 'object' && 'value' in first) {
-    // @ts-ignore – shape check performed at runtime
-    return first.value ?? '';
+  /* 1. Direct strings or wrapped `{ value }` objects. */
+  for (const a of args) {
+    if (typeof a === 'string' && looksLikeGeom(a)) return a;
+    if (a && typeof a === 'object' && typeof a.value === 'string' &&
+        looksLikeGeom(a.value)) {
+      return a.value;
+    }
   }
 
-  /* ───── (2) Edit‑context: (fieldObj, value, …) ─────────────────── */
-  if (
-    first &&
-    typeof first === 'object' &&
-    'name' in first &&
-    args.length > 1
-  ) {
-    return /** @type {string} */ (args[1] ?? '');
+  /* 2. Search inside objects (row objects, Express req, etc.). */
+  for (const a of args) {
+    if (a && typeof a === 'object') {
+      for (const v of Object.values(a)) {
+        if (typeof v === 'string' && looksLikeGeom(v)) return v;
+      }
+    }
   }
 
-  /* ───── (3) Edit‑context legacy: (fieldName, value, …) ─────────── */
-  if (typeof first === 'string' && args.length > 1) {
-    return /** @type {string} */ (args[1] ?? '');
-  }
-
-  /* ───── (4) Primitive WKT/EWKT string ──────────────────────────── */
-  if (typeof first === 'string') return first;
-
-  /* Fallback – nothing we can meaningfully parse */
+  /* Nothing usable. */
   return '';
 }
 
 /**
- * Safely serialise an arbitrary JS value for in‑page JS (single‑escaped).
+ * Safely serialise *anything* into a JS literal suitable for direct in‑page
+ * embedding.  Guarantees a string is always returned.
  *
  * @param {unknown} v
  * @returns {string}
  */
 function js(v) {
-  return JSON.stringify(v).replace(/</g, '\\u003c');
+  const safe = v === undefined ? null : v;
+  return JSON.stringify(safe).replace(/</g, '\\u003c');
 }
 
-/**
- * @returns {import('@saltcorn/types').FieldView}
- */
+/* ────────────────────────── Field‑view ───────────────────────── */
+
 function showView() {
   return {
     name:   'show',
@@ -75,17 +85,13 @@ function showView() {
      * @returns {string}         HTML/JS payload.
      */
     run(...args) {
-      /* -------------------------------------------------------------- *
-       * 1.  Determine the geometry string from any signature.          *
-       * -------------------------------------------------------------- */
-      const value = resolveValue(args);
+      /* 1 – Extract geometry string (robust). */
+      const wkt = resolveValue(args);
 
-      /* -------------------------------------------------------------- *
-       * 2.  Server‑side WKT ➜ GeoJSON conversion (robust).             *
-       * -------------------------------------------------------------- */
-      const gj = wktToGeoJSON(value);
+      /* 2 – Server‑side WKT → GeoJSON conversion (returns *undefined* on failure). */
+      const gj = wkt ? wktToGeoJSON(wkt) : undefined;
 
-      /* 3.  Build the Leaflet viewer.                                  */
+      /* 3 – Build the Leaflet viewer. */
       const mapId = `show_${Math.random().toString(36).slice(2)}`;
       const { lat, lng, zoom } = DEFAULT_CENTER;
 
@@ -98,6 +104,7 @@ function showView() {
   const MAP_ID   = ${js(mapId)};
   const GJ       = ${js(gj)};
 
+  /* Utility loaders */
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
   function haveJs(s){ return !!(document._loadedScripts && document._loadedScripts[s]);}
   function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
@@ -111,6 +118,7 @@ function showView() {
   (async function(){
     await loadCss(LEAF_CSS);
     await loadJs(LEAF_JS);
+
     const map=L.map(MAP_ID).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
       attribution:'&copy; OpenStreetMap contributors'
