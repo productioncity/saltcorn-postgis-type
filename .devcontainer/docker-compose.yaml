@@ -1,17 +1,16 @@
 services:
   app:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
 
     volumes:
       - ../..:/workspaces:cached
-      
+
     # Overrides default command so things don't shut down after the process ends.
     command: sleep infinity
     env_file:
       - ../.env
-
 
   saltcorn:
     image: saltcorn/saltcorn:latest
@@ -32,7 +31,7 @@ services:
         target: "/tmp"
         tmpfs:
           size: 262144000
-          mode: 01777
+          mode: 1777
       - "/etc/timezone:/etc/timezone:ro"
       - filestore:/filestore
       - ../..:/workspaces:cached
@@ -74,6 +73,7 @@ services:
       - PGDATA=/var/lib/postgresql/data/pgdata
       - PGPASSFILE=/root/.pgpass
       - POSTGRES_SYNCHRONOUS_COMMIT=on
+      - POSTGRES_INITDB_ARGS=--set=shared_preload_libraries='pg_cron,timescaledb' --set=cron.database_name=saltcorn
       - TZ=${TZ:-Australia/Sydney}
     entrypoint:
       - "bash"
@@ -133,11 +133,7 @@ services:
         tmpfs:
           size: 2147483648
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'PGPASSWORD=$${POSTGRES_PASSWORD} pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} && PGPASSWORD=$${POSTGRES_PASSWORD} psql -U $${POSTGRES_USER} -d template_postgis -tAc "SELECT 1 FROM pg_extension WHERE extname=''postgis'';" | grep -q 1 || exit 1',
-        ]
+      test: [ "CMD-SHELL", 'PGPASSWORD=$${POSTGRES_PASSWORD} pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} && PGPASSWORD=$${POSTGRES_PASSWORD} psql -U $${POSTGRES_USER} -d template_postgis -tAc "SELECT 1 FROM pg_extension WHERE extname=''postgis'';" | grep -q 1 || exit 1' ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -175,5 +171,4 @@ services:
 
 volumes:
   postgres:
-  filestore:
-  # pgadmin:
+  filestore: # pgadmin:
