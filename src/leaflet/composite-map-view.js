@@ -23,6 +23,22 @@ const dbg              = require('../utils/debug');
 const { wktToGeoJSON } = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
+/* ── Saltcorn 0.x / 1.x dual-export fix ───────────────────────────── */
+const TableCls =
+  Table && typeof Table.findOne === 'function'
+    ? Table
+    : Table && Table.Table
+      ? Table.Table
+      : Table;
+
+const ViewMod = require('@saltcorn/data/models/view');
+const ViewCls =
+  ViewMod && typeof ViewMod.findOne === 'function'
+    ? ViewMod
+    : ViewMod && ViewMod.View
+      ? ViewMod.View
+      : ViewMod;
+
 /**
  * Safely embed *anything* as a JS literal (prevents </script> bust-outs).
  *
@@ -64,31 +80,67 @@ function buildConfigFields(fields) {
 }
 
 /**
- * Saltcorn calls configurationWorkflow either as:
- *   • configurationWorkflow(table_id)
- *   • configurationWorkflow(req, table_id)
- * We detect the pattern and extract the numeric id accordingly.
+ * Attempt to locate the Table instance regardless of how Saltcorn invoked us.
+ *
+ * @param {unknown[]} sig  Raw configurationWorkflow arguments.
+ * @returns {Promise<import('@saltcorn/types').Table|undefined>}
+ */
+async function resolveTable(sig) {
+  const [first, second] = sig;
+
+  /* 1️⃣ Direct table_id supplied (number or numeric string) */
+  const tryNumeric = Number(
+    typeof first === 'number' || typeof first === 'string' ? first : second,
+  );
+  if (Number.isFinite(tryNumeric) && tryNumeric > 0) {
+    const t = await TableCls.findOne({ id: tryNumeric });
+    if (t) return t;
+  }
+
+  /* 2️⃣ `req` object present – mine the details */
+  const req =
+    first && typeof first === 'object' && 'method' in first ? first : undefined;
+  if (!req) return undefined;
+
+  /* Existing view edit – table id lives on req.view */
+  if (req.view && req.view.table_id) {
+    return TableCls.findOne({ id: req.view.table_id });
+  }
+
+  /* New view wizard – ?table=<name> */
+  if (req.query && req.query.table) {
+    return TableCls.findOne({ name: req.query.table });
+  }
+
+  /* Fallback – view name in :params → look-up view → table */
+  const viewName =
+    req.params?.name || req.params?.viewname || req.params?.0 || undefined;
+  if (viewName) {
+    const vw = await ViewCls.findOne({ name: viewName });
+    if (vw) return TableCls.findOne({ id: vw.table_id });
+  }
+
+  return undefined;
+}
+
+/**
+ * Saltcorn calls configurationWorkflow with wildly different signatures.
  *
  * @param {...unknown} sig
  * @returns {import('@saltcorn/data/models/workflow').Workflow}
  */
 function configurationWorkflow(...sig) {
-  const table_id =
-    sig.length >= 2 && sig[0] && typeof sig[0] === 'object' && 'method' in sig[0]
-      ? Number(sig[1])
-      : Number(sig[0]);
-
-  dbg.info('configurationWorkflow()', { rawSignature: sig, table_id });
+  dbg.info('configurationWorkflow()', { rawSignature: sig });
 
   return new Workflow({
     steps: [
       {
         name: 'settings',
         form: async () => {
-          const table  = await Table.findOne({ id: table_id });
+          const table = await resolveTable(sig);
           dbg.info('Table.findOne()', { found: !!table });
           const fields = table ? await table.getFields() : [];
-          dbg.info('getFields()', { count: fields.length, fields });
+          dbg.info('getFields()', { count: fields.length });
           return new Form({ fields: buildConfigFields(fields) });
         },
       },
@@ -123,7 +175,7 @@ const compositeMapTemplate = {
 
     const where =
       typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef };
-    const table = await Table.findOne(where);
+    const table = await TableCls.findOne(where);
     if (!table) {
       dbg.error('Table not found at run-time', { where });
       return '<div class="alert alert-danger">Table not found.</div>';
