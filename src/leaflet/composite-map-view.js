@@ -14,6 +14,7 @@
 
 const Table                           = require('@saltcorn/data/models/table');
 const Workflow                        = require('@saltcorn/data/models/workflow');
+const Form                            = require('@saltcorn/data/models/form');      /* ← added */
 const { wktToGeoJSON }                = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER }     = require('../constants');
 
@@ -77,9 +78,8 @@ function configurationWorkflow(table_id) {
         name: 'settings',
         form: async () => {
           const table = await Table.findOne({ id: table_id });
-          return {
-            fields: configFields(table),
-          };
+          /* The workflow step MUST return an actual Form instance */
+          return new Form({ fields: configFields(table) });            /* ← fixed */
         },
       },
     ],
