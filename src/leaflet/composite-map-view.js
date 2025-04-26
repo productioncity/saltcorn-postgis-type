@@ -1,10 +1,9 @@
 /**
  * composite-map-view.js
  * -----------------------------------------------------------------------------
- * Saltcorn view-template “composite_map” – plots every geometry row on one
- * Leaflet map.
+ * View-template “composite_map” – plots every geometry row on one Leaflet map.
  *
- * Author:  Troy Kelly  <troy@team.production.city>
+ * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0-1.0
  */
 
@@ -12,32 +11,28 @@
 
 /* eslint-disable max-lines-per-function */
 
-const Table    = require('@saltcorn/data/models/table');
-const Workflow = require('@saltcorn/data/models/workflow');
-const Form     = require('@saltcorn/data/models/form');
-
+const Table        = require('@saltcorn/data/models/table');
+const Workflow     = require('@saltcorn/data/models/workflow');
+const Form         = require('@saltcorn/data/models/form');
 const { wktToGeoJSON }            = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
 /**
- * Safe serialiser for inlined JS literals.
+ * Safe JS-literal serialiser.
  *
  * @param {unknown} v
  * @returns {string}
  */
-function js(v) {
-  return JSON.stringify(v ?? null).replace(/</g, '\\u003c');
-}
+const js = (v) => JSON.stringify(v ?? null).replace(/</g, '\\u003c');
 
 /**
- * Build the configuration-form fields.
+ * Build the configuration-form fields from a raw field list.
  *
- * @param {import('@saltcorn/data/models/table').Table|null} table
+ * @param {import('@saltcorn/types').Field[]} fields
  * @returns {import('@saltcorn/types').Field[]}
  */
-function configFields(table) {
-  /* Offer every column name – the admin will pick the geometry one. */
-  const opts = (table?.fields || []).map((f) => f.name);
+function buildConfigFields(fields) {
+  const opts = fields.map((f) => f.name);          // every column, no filter
 
   return [
     {
@@ -58,7 +53,7 @@ function configFields(table) {
 }
 
 /**
- * Workflow shown when the user creates / edits the view.
+ * Workflow that Saltcorn shows when the admin creates / edits the view.
  *
  * @param {number} table_id
  * @returns {import('@saltcorn/data/models/workflow').Workflow}
@@ -69,9 +64,9 @@ function configurationWorkflow(table_id) {
       {
         name: 'settings',
         form: async () => {
-          const table = await Table.findOne({ id: table_id });
-          if (table) table.fields = await table.getFields();
-          return new Form({ fields: configFields(table) });
+          const table  = await Table.findOne({ id: table_id });
+          const fields = table ? await table.getFields() : [];
+          return new Form({ fields: buildConfigFields(fields) });
         },
       },
     ],
@@ -89,7 +84,7 @@ const compositeMapTemplate = {
   configuration_workflow: configurationWorkflow,
 
   /**
-   * Render the map.
+   * Render the map at runtime.
    *
    * @param {number} table_id
    * @param {string} _viewname
@@ -118,7 +113,7 @@ const compositeMapTemplate = {
     }
     const collection = { type: 'FeatureCollection', features };
 
-    /* 3 – HTML/JS payload */
+    /* 3 – HTML / JS payload */
     const mapId = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
@@ -142,8 +137,7 @@ const compositeMapTemplate = {
     document.head.appendChild(sc);});}
 
   (async function init(){
-    await loadCss(LEAF_CSS);
-    await loadJs(LEAF_JS);
+    await loadCss(LEAF_CSS); await loadJs(LEAF_JS);
 
     const map=L.map(MAP_ID).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
