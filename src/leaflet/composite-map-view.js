@@ -2,39 +2,47 @@
  * composite-map-view.js
  * -----------------------------------------------------------------------------
  * View-template “composite_map” – plots every geometry row returned by the
- * query on one interactive Leaflet map.  Now fully configurable:
+ * query on one interactive Leaflet map.
  *
- *   • “Create new row” button – links to any Saltcorn *create* view.
- *   • “Default state”        – row-limit, default filter (WHERE expression).
- *   • “Options”              – default order, descending toggle, grouping-field
- *                              and maximum rows.
+ * v2 – 2025-04-26
+ *   • Popup now supports Handlebars templates (`{{field}}`, `{{#if …}}`, etc.).
+ *   • Point markers can be customised with an **icon template** (HTML, FA
+ *     classes or direct image URL) – also Handlebars-aware.
+ *   • Configuration form tool-tips extended explaining template usage.
  *
  * All debug output remains controllable via PLUGIN_DEBUG in src/constants.js.
  *
- * Author:  Troy Kelly  <troy@team.production.city>
- * Licence: CC0-1.0
+ * Author:      Troy Kelly  <troy@team.production.city>
+ * Licence:     CC0-1.0
  */
 
 'use strict';
 
 /* eslint-disable max-lines-per-function */
 
+const dbg = require('../utils/debug');
+
 const Table    = require('@saltcorn/data/models/table');
 const Workflow = require('@saltcorn/data/models/workflow');
 const Form     = require('@saltcorn/data/models/form');
-const dbg      = require('../utils/debug');
-const { wktToGeoJSON }         = require('../utils/geometry');
+
+const { wktToGeoJSON }           = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
-/* Saltcorn 0.x / 1.x dual-export helpers */
-const TableCls =
-  Table && typeof Table.findOne === 'function' ? Table
-    : Table && Table.Table ? Table.Table : Table;
+/* Optional: runtime Handlebars (lazy-loaded via CDN in browser) */
+const HANDLEBARS_CDN =
+  'https://cdn.jsdelivr.net/npm/handlebars@4.7.7/dist/handlebars.min.js';
 
-const ViewMod = require('@saltcorn/data/models/view');
-const ViewCls =
-  ViewMod && typeof ViewMod.findOne === 'function' ? ViewMod
-    : ViewMod && ViewMod.View ? ViewMod.View : ViewMod;
+/* ─────────────────── Saltcorn 0.x / 1.x compatibility ────────────────── */
+
+const TableCls = Table?.findOne ? Table
+  : Table?.Table       ? Table.Table : Table;
+
+const ViewMod  = require('@saltcorn/data/models/view');
+const ViewCls  = ViewMod?.findOne ? ViewMod
+  : ViewMod?.View       ? ViewMod.View : ViewMod;
+
+/* ───────────────────────────── helpers ──────────────────────────────── */
 
 /**
  * JS-safe JSON literal helper.
@@ -46,8 +54,6 @@ function js(v) {
   return JSON.stringify(v ?? null).replace(/</g, '\\u003c');
 }
 
-/* ───────────────────────────── Config helpers ─────────────────────────── */
-
 /**
  * Derive <select> options from table fields.
  *
@@ -56,7 +62,7 @@ function js(v) {
  */
 function buildConfigFields(fields) {
   const opts = fields.map((f) => f.name);
-  dbg.info('buildConfigFields()', { opts });
+  dbg.debug('buildConfigFields()', { opts });
 
   return [
     /* ───── BASIC ───── */
@@ -69,9 +75,30 @@ function buildConfigFields(fields) {
     },
     {
       name: 'popup_field',
-      label: 'Popup text field (optional)',
+      label: 'Popup text field',
+      sublabel:
+        'Simple text from this column. Ignored when “Popup template” is set.',
       type: 'String',
       attributes: { options: opts },
+    },
+    {
+      name: 'popup_template',
+      label: 'Popup Handlebars template',
+      sublabel:
+        'Optional. Uses Handlebars ‑ row fields are available directly. ' +
+        'Examples: {{name}}, {{#if status}}{{status}}{{/if}}.',
+      type: 'String',
+      attributes: { input_type: 'textarea', rows: 3 },
+    },
+    {
+      name: 'icon_template',
+      label: 'Point icon template',
+      sublabel:
+        'Optional. Handlebars supported. ' +
+        'Return HTML (e.g. <i class="fas fa-car"></i>) or an image URL. ' +
+        'Examples: {{icon_html}} or {{icon_url}}.',
+      type: 'String',
+      attributes: { input_type: 'textarea', rows: 2 },
     },
     {
       name: 'click_view',
@@ -110,7 +137,9 @@ function buildConfigFields(fields) {
     {
       name: 'group_field',
       label: 'Group by column (optional)',
-      sublabel: 'Colour markers by discrete values in this column.',
+      sublabel:
+        'Colour markers by discrete values in this column. ' +
+        'Ignored when an Icon template is provided.',
       type: 'String',
       attributes: { options: opts },
     },
@@ -196,10 +225,9 @@ function configurationWorkflow(...sig) {
       {
         name: 'settings',
         form: async () => {
-          const tbl   = await resolveTable(sig);
-          dbg.info('Table.findOne()', { found: !!tbl });
-          const flds  = tbl ? await tbl.getFields() : [];
-          dbg.info('getFields()', { count: flds.length });
+          const tbl  = await resolveTable(sig);
+          const flds = tbl ? await tbl.getFields() : [];
+          dbg.info('Config form fields', { count: flds.length });
           return new Form({ fields: buildConfigFields(flds) });
         },
       },
@@ -212,7 +240,8 @@ function configurationWorkflow(...sig) {
 const compositeMapTemplate = {
   name: 'composite_map',
   description:
-    'Plots every geometry row returned by the query on one interactive Leaflet map.',
+    'Plots every geometry row from the query on a Leaflet map. Now with ' +
+    'Handlebars popup & icon templating.',
   display_state_form: false,
   get_state_fields: () => [],
   configuration_workflow: configurationWorkflow,
@@ -230,9 +259,12 @@ const compositeMapTemplate = {
     dbg.info('composite_map.run()', { tableRef, cfg, state });
 
     /* ───── Config unwrap ───── */
-    const geomCol    = cfg.geometry_field || 'geom';
-    const popupField = cfg.popup_field    || '';
-    const clickView  = cfg.click_view     || '';
+    const geomCol       = cfg.geometry_field   || 'geom';
+    const popupField    = cfg.popup_field      || '';
+    const popupTemplate = cfg.popup_template   || '';
+    const iconTemplate  = cfg.icon_template    || '';
+
+    const clickView  = cfg.click_view  || '';
     const height     = Number(cfg.height) || 300;
 
     const showCreate = cfg.show_create && cfg.create_view;
@@ -278,9 +310,9 @@ const compositeMapTemplate = {
       if (!gj) continue;
 
       features.push({
-        type:       'Feature',
+        type: 'Feature',
         properties: { __id: row.id, ...row },
-        geometry:   gj.type === 'Feature' ? gj.geometry : gj,
+        geometry: gj.type === 'Feature' ? gj.geometry : gj,
       });
     }
     dbg.info('Features built', { count: features.length });
@@ -306,9 +338,11 @@ ${createBtnHTML}
 <script>
 (function(){
   const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
+        hbJs=${js(HANDLEBARS_CDN)},
         geo=${js(collection)}, id=${js(mapId)},
         lbl=${js(popupField)}, navView=${js(clickView)},
-        grp=${js(groupField)};
+        grp=${js(groupField)},
+        tplSrc=${js(popupTemplate)}, iconTplSrc=${js(iconTemplate)};
 
   /* Loader helpers */
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
@@ -328,13 +362,35 @@ ${createBtnHTML}
 
   /* Main */
   (async()=>{await loadCss(css);await loadJs(jsSrc);
+    if(tplSrc||iconTplSrc) await loadJs(hbJs);
+
+    /* Pre-compile templates if present */
+    const popupFn = (window.Handlebars&&tplSrc)?Handlebars.compile(tplSrc):null;
+    const iconFn  = (window.Handlebars&&iconTplSrc)?Handlebars.compile(iconTplSrc):null;
+
     const map=L.map(id).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       { attribution:'&copy; OpenStreetMap' }).addTo(map);
 
-    const layer=L.geoJSON(geo,{
-      pointToLayer:function(f,latlng){
-        if(!grp||!f.properties)return L.marker(latlng);
+    /* Determine per-row marker */
+    function buildMarker(f,latlng){
+      /* 1. Icon template overrides everything */
+      if(iconFn){
+        let html='';
+        try{html=iconFn(f.properties);}catch(e){console.error(e);}
+        if(!html) return L.marker(latlng); /* fallback */
+
+        /* Image URL vs raw HTML */
+        if(/^(https?:)?\\/\\/.+\\.(png|jpe?g|gif|svg)$/i.test(html)){
+          const icon=L.icon({iconUrl:html,iconSize:[28,28],iconAnchor:[14,28]});
+          return L.marker(latlng,{icon});
+        }
+        const divI=L.divIcon({className:'',html,iconSize:[28,28],iconAnchor:[14,28]});
+        return L.marker(latlng,{icon:divI});
+      }
+
+      /* 2. Group colouring */
+      if(grp&&f.properties){
         const g=f.properties[grp];
         if(!(g in grpColour)){
           grpColour[g]=PALETTE[Object.keys(grpColour).length%PALETTE.length];
@@ -344,9 +400,18 @@ ${createBtnHTML}
           '<i class="fas fa-map-marker-alt" style="color:'+col+';font-size:1.5rem;"></i>',
           iconSize:[24,24],iconAnchor:[12,24]});
         return L.marker(latlng,{icon});
-      },
+      }
+
+      /* 3. Default Leaflet blue marker */
+      return L.marker(latlng);
+    }
+
+    const layer=L.geoJSON(geo,{
+      pointToLayer:function(f,latlng){return buildMarker(f,latlng);},
       style:function(f){
-        if(!grp||!f.properties)return {};
+        /* Polygon colouring when group used */
+        if(iconFn) return {};
+        if(!grp||!f.properties) return {};
         const g=f.properties[grp];
         if(!(g in grpColour)){
           grpColour[g]=PALETTE[Object.keys(grpColour).length%PALETTE.length];
@@ -354,8 +419,14 @@ ${createBtnHTML}
         return {color:grpColour[g]};
       },
       onEachFeature:function(f,l){
-        if(lbl&&f.properties&&f.properties[lbl]!==undefined)
-          l.bindPopup(String(f.properties[lbl]));
+        let popContent='';
+        if(popupFn){
+          try{popContent=popupFn(f.properties);}catch(e){console.error(e);}
+        }else if(lbl&&f.properties&&f.properties[lbl]!==undefined){
+          popContent=String(f.properties[lbl]);
+        }
+        if(popContent) l.bindPopup(popContent);
+
         if(navView&&f.properties&&f.properties.__id){
           l.on('click',()=>{window.location.href='/view/'+navView+'?id='+f.properties.__id;});
         }
