@@ -1,8 +1,7 @@
 /**
  * composite-map-view.js
  * -----------------------------------------------------------------------------
- * Saltcorn view-template **“composite_map”** – renders the geometry from every
- * row returned by the query on a single interactive Leaflet map.
+ * Saltcorn view-template “composite_map” – shows every geometry row on one map.
  *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0-1.0
@@ -12,14 +11,15 @@
 
 /* eslint-disable max-lines-per-function */
 
-const Table        = require('@saltcorn/data/models/table');
-const Workflow     = require('@saltcorn/data/models/workflow');
-const Form         = require('@saltcorn/data/models/form');
-const { wktToGeoJSON }        = require('../utils/geometry');
+const Table    = require('@saltcorn/data/models/table');
+const Workflow = require('@saltcorn/data/models/workflow');
+const Form     = require('@saltcorn/data/models/form');
+
+const { wktToGeoJSON }            = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
 /**
- * Safe JS literal helper.
+ * Serialise *anything* to a safe inline-JS literal.
  *
  * @param {unknown} v
  * @returns {string}
@@ -29,14 +29,14 @@ function js(v) {
 }
 
 /**
- * Build the configuration-form field list.
+ * Build the configuration-form fields.
  *
- * @param {import('@saltcorn/types').Table} table
+ * @param {{fields: import('@saltcorn/types').Field[]}} ctx
  * @returns {import('@saltcorn/types').Field[]}
  */
-function configFields(table) {
+function configFields({ fields }) {
   const opts =
-    (table?.fields || [])
+    (fields || [])
       .filter(
         (f) =>
           f.type &&
@@ -64,7 +64,7 @@ function configFields(table) {
 }
 
 /**
- * Workflow used by Saltcorn when a user creates / edits the view.
+ * Saltcorn workflow that presents the config form.
  *
  * @param {number} table_id
  * @returns {import('@saltcorn/data/models/workflow').Workflow}
@@ -75,14 +75,10 @@ function configurationWorkflow(table_id) {
       {
         name: 'settings',
         form: async () => {
-          const table = await Table.findOne({ id: table_id });
-
-          /* Ensure .fields is populated so option list is not empty */
-          if (table && typeof table.getFields === 'function') {
-            await table.getFields();
-          }
-
-          return new Form({ fields: configFields(table) });
+          const table  = await Table.findOne({ id: table_id });
+          const fields = table ? await table.getFields() : [];
+          /* Pass a fake object exposing `.fields` so configFields works */
+          return new Form({ fields: configFields({ fields }) });
         },
       },
     ],
@@ -94,14 +90,13 @@ function configurationWorkflow(table_id) {
 const compositeMapTemplate = {
   name: 'composite_map',
   description:
-    'Plots every geometry row on a single Leaflet map (dashboard-style).',
+    'Plots every geometry row in the result-set on a single Leaflet map.',
   display_state_form: false,
   get_state_fields: () => [],
-  configFields,
   configuration_workflow: configurationWorkflow,
 
   /**
-   * Renderer – called by Saltcorn at run-time.
+   * Render the composite map.
    *
    * @param {number} table_id
    * @param {string} _viewname
@@ -113,11 +108,11 @@ const compositeMapTemplate = {
     const geomCol = cfg.geometry_field || 'geom';
     const height  = Number(cfg.height) || 300;
 
-    /* 1 – Fetch rows */
+    /* --- 1. Fetch data -------------------------------------------------- */
     const table = await Table.findOne({ id: table_id });
     const rows  = table ? await table.getRows(state) : [];
 
-    /* 2 – Each geometry ➜ GeoJSON Feature */
+    /* --- 2. Build GeoJSON collection ----------------------------------- */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
@@ -131,12 +126,12 @@ const compositeMapTemplate = {
         features.push({ type: 'Feature', properties: {}, geometry: gj });
       }
     }
-
     const collection = { type: 'FeatureCollection', features };
+
+    /* --- 3. HTML/JS payload -------------------------------------------- */
     const mapId = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
-    /* 3 – HTML payload */
     return `
 <div id="${mapId}" class="border rounded" style="height:${height}px;"></div>
 <script>
