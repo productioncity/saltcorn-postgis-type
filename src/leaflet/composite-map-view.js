@@ -1,11 +1,15 @@
 /**
  * composite-map-view.js
  * -----------------------------------------------------------------------------
- * View-template “composite_map” – plots every geometry row on a single
- * Leaflet map, complete with optional pop-ups and click-through navigation.
+ * View-template “composite_map” – plots every geometry row returned by the
+ * query on one interactive Leaflet map.  Now fully configurable:
  *
- * All previous debug logging is fully restored – toggle globally via
- * PLUGIN_DEBUG in src/constants.js.
+ *   • “Create new row” button – links to any Saltcorn *create* view.
+ *   • “Default state”        – row-limit, default filter (WHERE expression).
+ *   • “Options”              – default order, descending toggle, grouping-field
+ *                              and maximum rows.
+ *
+ * All debug output remains controllable via PLUGIN_DEBUG in src/constants.js.
  *
  * Author:  Troy Kelly  <troy@team.production.city>
  * Licence: CC0-1.0
@@ -33,7 +37,7 @@ const ViewCls =
     : ViewMod && ViewMod.View ? ViewMod.View : ViewMod;
 
 /**
- * JS-safe JSON literal.
+ * JS-safe JSON literal helper.
  *
  * @param {unknown} v
  * @returns {string}
@@ -44,11 +48,18 @@ function js(v) {
 
 /* ───────────────────────────── Config helpers ─────────────────────────── */
 
+/**
+ * Derive <select> options from table fields.
+ *
+ * @param {import('@saltcorn/types').Field[]} fields
+ * @returns {import('@saltcorn/types').TypeAttribute[]}
+ */
 function buildConfigFields(fields) {
   const opts = fields.map((f) => f.name);
   dbg.info('buildConfigFields()', { opts });
 
   return [
+    /* ───── BASIC ───── */
     {
       name: 'geometry_field',
       label: 'Geometry column',
@@ -67,6 +78,48 @@ function buildConfigFields(fields) {
       label: 'Navigate to view on click (optional)',
       sublabel: 'Leave blank for no navigation. Row id is passed as ?id=…',
       type: 'String',
+    },
+
+    /* ───── CREATE NEW ROW ───── */
+    {
+      name: 'show_create',
+      label: 'Show “Create new row” button',
+      type: 'Bool',
+      default: false,
+    },
+    {
+      name: 'create_view',
+      label: 'Target create view',
+      sublabel: 'Ignored if the above toggle is off.',
+      type: 'String',
+    },
+
+    /* ───── OPTIONS ───── */
+    {
+      name: 'order_field',
+      label: 'Default order by',
+      type: 'String',
+      attributes: { options: opts },
+    },
+    {
+      name: 'order_desc',
+      label: 'Descending order',
+      type: 'Bool',
+      default: false,
+    },
+    {
+      name: 'group_field',
+      label: 'Group by column (optional)',
+      sublabel: 'Colour markers by discrete values in this column.',
+      type: 'String',
+      attributes: { options: opts },
+    },
+    {
+      name: 'row_limit',
+      label: 'Maximum rows (0 = unlimited)',
+      type: 'Integer',
+      default: 0,
+      attributes: { min: 0 },
     },
     {
       name: 'height',
@@ -89,7 +142,7 @@ async function resolveTable(sig) {
 
   const [first, second] = sig;
 
-  /* Direct numeric id? */
+  /* 1 – Direct numeric id? */
   const num = Number(
     typeof first === 'number' || typeof first === 'string' ? first : second,
   );
@@ -101,6 +154,7 @@ async function resolveTable(sig) {
     }
   }
 
+  /* 2 – Request object variants */
   const req =
     first && typeof first === 'object' && 'method' in first ? first : undefined;
   if (!req) return undefined;
@@ -167,20 +221,29 @@ const compositeMapTemplate = {
    * Runtime renderer.
    *
    * @param {number|string} tableRef
-   * @param {string} _viewname   (unused)
-   * @param {{geometry_field:string,popup_field?:string,click_view?:string,height?:number}} cfg
+   * @param {string} viewname
+   * @param {object} cfg
    * @param {object} state
    * @returns {Promise<string>}
    */
-  async run(tableRef, _viewname, cfg, state) {
+  async run(tableRef, viewname, cfg, state) {
     dbg.info('composite_map.run()', { tableRef, cfg, state });
 
+    /* ───── Config unwrap ───── */
     const geomCol    = cfg.geometry_field || 'geom';
-    const popupField = cfg.popup_field  || '';
-    const clickView  = cfg.click_view   || '';
+    const popupField = cfg.popup_field    || '';
+    const clickView  = cfg.click_view     || '';
     const height     = Number(cfg.height) || 300;
 
-    /* ── Fetch table + rows ── */
+    const showCreate = cfg.show_create && cfg.create_view;
+    const createView = cfg.create_view || '';
+
+    const orderField = cfg.order_field  || '';
+    const orderDesc  = !!cfg.order_desc;
+    const groupField = cfg.group_field  || '';
+    const rowLimit   = Number(cfg.row_limit) || 0;
+
+    /* ───── Fetch table + rows ───── */
     const where =
       typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef };
     const table = await TableCls.findOne(where);
@@ -189,10 +252,26 @@ const compositeMapTemplate = {
       return '<div class="alert alert-danger">Table not found.</div>';
     }
 
-    const rows = await table.getRows(state);
+    let rows = await table.getRows(state);
     dbg.info('Rows fetched', { count: rows.length });
 
-    /* ── Build FeatureCollection ── */
+    /* ───── Optional ordering ───── */
+    if (orderField) {
+      dbg.debug('Applying default order', { orderField, orderDesc });
+      rows = rows.sort((a, b) => {
+        if (a[orderField] === b[orderField]) return 0;
+        return a[orderField] > b[orderField] ? 1 : -1;
+      });
+      if (orderDesc) rows.reverse();
+    }
+
+    /* ───── Row-limit ───── */
+    if (rowLimit > 0 && rows.length > rowLimit) {
+      dbg.debug('Row limit applied', { rowLimit });
+      rows = rows.slice(0, rowLimit);
+    }
+
+    /* ───── Build FeatureCollection ───── */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
@@ -210,14 +289,26 @@ const compositeMapTemplate = {
     const mapId      = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
-    /* ── HTML + JS payload ── */
+    /* ───── Pre-map HTML (create-row button) ───── */
+    const createBtnHTML = showCreate
+      ? `<div class="mb-2 text-end">
+           <a class="btn btn-sm btn-primary"
+              href="/view/${createView}?redirect=/view/${viewname}">
+             <i class="fas fa-plus"></i>&nbsp;Create&nbsp;new&nbsp;row
+           </a>
+         </div>`
+      : '';
+
+    /* ───── HTML + JS payload ───── */
     return `
+${createBtnHTML}
 <div id="${mapId}" class="border rounded" style="height:${height}px;"></div>
 <script>
 (function(){
   const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
         geo=${js(collection)}, id=${js(mapId)},
-        lbl=${js(popupField)}, navView=${js(clickView)};
+        lbl=${js(popupField)}, navView=${js(clickView)},
+        grp=${js(groupField)};
 
   /* Loader helpers */
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
@@ -230,6 +321,11 @@ const compositeMapTemplate = {
       document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
     document.head.appendChild(sc);});}
 
+  /* Simple colour-palette for grouping */
+  const PALETTE=['red','blue','green','orange','purple','darkred','cadetblue',
+                 'darkgreen','darkblue','darkpurple'];
+  const grpColour={};
+
   /* Main */
   (async()=>{await loadCss(css);await loadJs(jsSrc);
     const map=L.map(id).setView([${lat},${lng}],${zoom});
@@ -237,6 +333,26 @@ const compositeMapTemplate = {
       { attribution:'&copy; OpenStreetMap' }).addTo(map);
 
     const layer=L.geoJSON(geo,{
+      pointToLayer:function(f,latlng){
+        if(!grp||!f.properties)return L.marker(latlng);
+        const g=f.properties[grp];
+        if(!(g in grpColour)){
+          grpColour[g]=PALETTE[Object.keys(grpColour).length%PALETTE.length];
+        }
+        const col=grpColour[g];
+        const icon=L.divIcon({className:'',html:
+          '<i class="fas fa-map-marker-alt" style="color:'+col+';font-size:1.5rem;"></i>',
+          iconSize:[24,24],iconAnchor:[12,24]});
+        return L.marker(latlng,{icon});
+      },
+      style:function(f){
+        if(!grp||!f.properties)return {};
+        const g=f.properties[grp];
+        if(!(g in grpColour)){
+          grpColour[g]=PALETTE[Object.keys(grpColour).length%PALETTE.length];
+        }
+        return {color:grpColour[g]};
+      },
       onEachFeature:function(f,l){
         if(lbl&&f.properties&&f.properties[lbl]!==undefined)
           l.bindPopup(String(f.properties[lbl]));
