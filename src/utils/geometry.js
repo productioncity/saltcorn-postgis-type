@@ -4,15 +4,10 @@
  * Stateless helpers for converting between WKT, EWKT, **hex-encoded WKB** and
  * GeoJSON, as well as validating PostGIS-related attribute objects.
  *
- * Handles every practical edge-case:
- *   • Optional `SRID=…;` prefix (EWKT).                     – in/out
- *   • Optional `Z`, `M`, `ZM` dimensionality suffix.       – in/out
- *   • Hex-WKB returned by a plain `geometry::text` cast.    – in
- *   • Node‐Postgres binary column output (`Buffer`).        – in
- *   • The PostGIS helper form `ST_AsEWKT(<hex-wkb>)`.       – in
+ * Now also understands the PostGIS helper form `ST_AsEWKT(<hex-wkb>)`.
  *
- * Author:   Troy Kelly <troy@team.production.city>
- * Licence:  CC0-1.0
+ * Author:  Troy Kelly  <troy@team.production.city>
+ * Licence: CC0-1.0
  */
 
 'use strict';
@@ -22,8 +17,9 @@
 const dbg       = require('./debug');
 const wellknown = require('wellknown');
 
-let wkx; // Lazy-required – optional dependency.
+let wkx;
 try {
+  // Pure-JS parser (MIT) – present unless the host deliberately prunes deps.
   // eslint-disable-next-line global-require
   wkx = require('wkx');
 } catch {
@@ -40,8 +36,7 @@ const { DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
 /* ───────────────────────── Internal helpers ───────────────────────── */
 
 /**
- * Safely converts **anything** to a string.  Buffers become hex, everything
- * else coerces with template-literal semantics.
+ * Coerce **anything** we might receive from Postgres into a string.
  *
  * @param {unknown} v
  * @returns {string|undefined}
@@ -54,7 +49,7 @@ function coerceToString(v) {
 }
 
 /**
- * True if the supplied string looks like pure hexadecimal.
+ * Naïve hex detector.
  *
  * @param {string} txt
  * @returns {boolean}
@@ -66,8 +61,7 @@ function isLikelyHex(txt) {
 }
 
 /**
- * Remove a trailing `::type` cast that PostgreSQL appends when
- * `geom::text` is used.
+ * Strip a trailing `::text` (or any `::type`) cast.
  *
  * @param {string} src
  * @returns {string}
@@ -79,11 +73,11 @@ function stripPgCast(src) {
 }
 
 /**
- * Converts hex-encoded WKB ➜ EWKT (string) *or* GeoJSON (object).
+ * Hex-WKB ➜ EWKT or GeoJSON.
  *
  * @template {'wkt'|'geojson'} T
  * @param {string} hex
- * @param {T}      as
+ * @param {T} as
  * @returns {T extends 'wkt' ? string|undefined
  *          : T extends 'geojson' ? Record<string, unknown>|undefined
  *          : never}
@@ -91,17 +85,19 @@ function stripPgCast(src) {
 function decodeHexWkb(hex, as) {
   dbg.trace('decodeHexWkb()', { as, sample: hex.slice(0, 18) });
   if (!wkx || !isLikelyHex(hex)) return /** @type {never} */ (undefined);
+
   try {
     const geom = wkx.Geometry.parse(Buffer.from(hex, 'hex'));
 
     if (as === 'geojson') {
       const g = /** @type {never} */ (geom.toGeoJSON());
+      dbg.debug('decodeHexWkb() ➜ GeoJSON');
       return g;
     }
 
-    /* as === 'wkt' */
     const srid = geom.srid && geom.srid !== 0 ? `SRID=${geom.srid};` : '';
     const wkt  = /** @type {never} */ (`${srid}${geom.toWkt()}`);
+    dbg.debug('decodeHexWkb() ➜ WKT', wkt.slice(0, 64));
     return wkt;
   } catch (e) {
     dbg.warn('decodeHexWkb() failed', e);
@@ -110,7 +106,7 @@ function decodeHexWkb(hex, as) {
 }
 
 /**
- * Strip Z/M ords from coordinate arrays (deep).
+ * Recursively drop Z/M from coords.
  *
  * @param {unknown} coords
  * @returns {unknown}
@@ -122,7 +118,7 @@ function stripZCoords(coords) {
 }
 
 /**
- * Remove Z/M everywhere in a GeoJSON object.
+ * Deep clone ➜ strip Z.
  *
  * @template {Record<string, unknown>} T
  * @param {T} geojson
@@ -137,7 +133,7 @@ function stripZFromGeoJSON(geojson) {
     if (g.type === 'GeometryCollection' && Array.isArray(g.geometries)) {
       g.geometries.forEach(recurse);
     } else if ('coordinates' in g) {
-      // @ts-ignore
+      // @ts-ignore – runtime path
       g.coordinates = stripZCoords(g.coordinates);
     }
   }
@@ -147,14 +143,14 @@ function stripZFromGeoJSON(geojson) {
 }
 
 /**
- * Ensure the result is ALWAYS Feature or FeatureCollection.
+ * Always return Feature / FeatureCollection.
  *
- * @template {Record<string, unknown>} T
- * @param {T|undefined} geom
+ * @param {Record<string, unknown>|undefined} geom
  * @returns {Record<string, unknown>|undefined}
  */
 function normaliseGeoJSON(geom) {
   if (!geom) return undefined;
+
   if (geom.type === 'Feature' || geom.type === 'FeatureCollection') return geom;
 
   if (geom.type === 'GeometryCollection' && Array.isArray(geom.geometries)) {
@@ -180,32 +176,37 @@ function normaliseGeoJSON(geom) {
  * @returns {string|undefined}
  */
 function toWkt(value) {
+  dbg.trace('toWkt()', { value });
   const coerced = coerceToString(value);
   if (!coerced) return undefined;
 
   const txt = stripPgCast(coerced.trim());
 
-  /* 0️⃣  Handle PostGIS helper form ST_AsEWKT(<hex>) */
-  const match = txt.match(/^ST_AsEWKT\(([^)]+)\)$/i);
-  if (match) {
-    const fromHex = decodeHexWkb(match[1], 'wkt');
-    if (fromHex) return fromHex;
+  /* PostGIS helper wrapper */
+  const helper = txt.match(/^ST_AsEWKT\(([^)]+)\)$/i);
+  if (helper) {
+    const out = decodeHexWkb(helper[1], 'wkt');
+    dbg.trace('toWkt() ­– via ST_AsEWKT helper', out?.slice?.(0, 64));
+    return out;
   }
 
-  /* 1️⃣ Already looks like EWKT/WKT */
+  /* Already WKT/EWKT */
   if (/^(SRID=\d+;)?[A-Z]+/u.test(txt)) return txt;
 
-  /* 2️⃣ Hex-encoded WKB */
-  return decodeHexWkb(txt, 'wkt');
+  /* Hex-WKB */
+  const wkt = decodeHexWkb(txt, 'wkt');
+  dbg.trace('toWkt() result', wkt?.slice?.(0, 64));
+  return wkt;
 }
 
 /**
- * Extract `[lng, lat]` from a POINT (any input form).
+ * Extract `[lng, lat]` from a POINT.
  *
  * @param {unknown} value
  * @returns {[number, number]|undefined}
  */
 function wktToLonLat(value) {
+  dbg.trace('wktToLonLat()', { value });
   const wkt = toWkt(value);
   if (!wkt) return undefined;
 
@@ -214,69 +215,71 @@ function wktToLonLat(value) {
     .match(
       /^POINT[^()]*\(\s*([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*/iu,
     );
-  return m ? [Number(m[1]), Number(m[2])] : undefined;
+  const out = m ? [Number(m[1]), Number(m[2])] : undefined;
+  dbg.trace('wktToLonLat() result', out);
+  return out;
 }
 
 /**
- * Convert WKT / EWKT / hex-WKB / ST_AsEWKT(hex) / Buffer ➜ 2-D GeoJSON.
+ * Convert ANY representation ➜ 2-D GeoJSON.
  *
  * @param {unknown} value
  * @returns {Record<string, unknown>|undefined}
  */
 function wktToGeoJSON(value) {
+  dbg.trace('wktToGeoJSON()', { value });
   const coerced = coerceToString(value);
   if (!coerced || coerced.trim() === '') return undefined;
 
   const raw = stripPgCast(coerced.trim());
 
-  /* 0️⃣  ST_AsEWKT(hex) wrapper */
+  /* ST_AsEWKT wrapper */
   const helper = raw.match(/^ST_AsEWKT\(([^)]+)\)$/i);
   if (helper) {
     const gj = decodeHexWkb(helper[1], 'geojson');
     return normaliseGeoJSON(stripZFromGeoJSON(gj));
   }
 
-  /* 1️⃣ Hex-WKB direct */
+  /* Hex-WKB */
   const hexDecoded = decodeHexWkb(raw, 'geojson');
   if (hexDecoded) return normaliseGeoJSON(stripZFromGeoJSON(hexDecoded));
 
-  /* 2️⃣ Strip EWKT SRID */
+  /* Plain WKT/EWKT */
   const txt = raw.replace(/^SRID=\d+;/iu, '');
 
-  /* 3️⃣ Prefer wkx */
   if (wkx) {
     try {
       const gj = /** @type {Record<string, unknown>} */ (
         wkx.Geometry.parse(txt).toGeoJSON()
       );
+      dbg.debug('wktToGeoJSON() via wkx');
       return normaliseGeoJSON(stripZFromGeoJSON(gj));
-    } catch {
-      /* fall-through */
+    } catch (e) {
+      dbg.warn('wkx parse failed – falling back to wellknown', e);
     }
   }
 
-  /* 4️⃣ wellknown fallback */
   try {
     return normaliseGeoJSON(wellknown.parse(txt));
   } catch {
-    /* last-chance: strip Z/M suffix then retry */
     const resc = txt.replace(/\b([A-Z]+)(?:ZM|Z|M)\b/iu, '$1');
     try {
       return normaliseGeoJSON(wellknown.parse(resc));
     } catch (err) {
-      dbg.warn('wktToGeoJSON() failed', err);
+      dbg.warn('wktToGeoJSON() final attempt failed', err);
       return undefined;
     }
   }
 }
 
 /**
- * Extract the first Z ordinate inside ANY geometry string.
+ * Extract first Z ordinate (falls back to 0).
  *
  * @param {string} src
  * @returns {number}
  */
 function extractFirstZ(src) {
+  dbg.trace('extractFirstZ()', { src: src?.slice?.(0, 64) });
   const wkt = toWkt(src) || (typeof src === 'string' ? src : '');
   const txt = wkt.replace(/^SRID=\d+;/iu, '');
 
@@ -284,7 +287,9 @@ function extractFirstZ(src) {
     /[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/,
   );
 
-  return m ? Number(m[1]) : 0;
+  const z = m ? Number(m[1]) : 0;
+  dbg.trace('extractFirstZ() result', z);
+  return z;
 }
 
 /**
@@ -294,6 +299,7 @@ function extractFirstZ(src) {
  * @returns {true|string}
  */
 function validateAttrs(attrs) {
+  dbg.trace('validateAttrs()', attrs);
   if (!attrs) return true;
   if ('srid' in attrs && (!Number.isInteger(attrs.srid) || attrs.srid < 1)) {
     return 'SRID must be a positive integer';
