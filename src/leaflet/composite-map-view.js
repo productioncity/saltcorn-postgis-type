@@ -13,6 +13,7 @@
 /* eslint-disable max-lines-per-function */
 
 const Table                           = require('@saltcorn/data/models/table');
+const Workflow                        = require('@saltcorn/data/models/workflow');
 const { wktToGeoJSON }                = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER }     = require('../constants');
 
@@ -60,6 +61,31 @@ function configFields(table) {
   ];
 }
 
+/**
+ * Saltcorn needs a **Workflow** when a user creates / edits a view.
+ * Without it the GUI cannot render the config form, which resulted in
+ * “View not found: undefined”.  This workflow exposes the fields built
+ * above and stores the resulting values in the view config.
+ *
+ * @param {number} table_id
+ * @returns {import('@saltcorn/data/models/workflow').Workflow}
+ */
+function configurationWorkflow(table_id) {
+  return new Workflow({
+    steps: [
+      {
+        name: 'settings',
+        form: async () => {
+          const table = await Table.findOne({ id: table_id });
+          return {
+            fields: configFields(table),
+          };
+        },
+      },
+    ],
+  });
+}
+
 /* ───────────────────────── View-template object ───────────────────────── */
 
 const compositeMapTemplate = {
@@ -69,6 +95,7 @@ const compositeMapTemplate = {
   display_state_form: false,
   get_state_fields: () => [],
   configFields,
+  configuration_workflow: configurationWorkflow,
 
   /**
    * Renders the map.
