@@ -4,11 +4,7 @@
  * Saltcorn view-template “composite_map” – plots every geometry row returned by
  * the query on a single Leaflet map.
  *
- * This fully-instrumented build records every step through the plug-in so we
- * can diagnose configuration problems quickly.  Set `PLUGIN_DEBUG = true` in
- * src/constants.js and watch Saltcorn’s console.
- *
- * Author:   Troy Kelly  <troy@team.production.city>
+ * Author:   Troy Kelly <troy@team.production.city>
  * Licence:  CC0-1.0
  */
 
@@ -23,7 +19,7 @@ const dbg              = require('../utils/debug');
 const { wktToGeoJSON } = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
-/* ── Saltcorn 0.x / 1.x dual-export fix ───────────────────────────── */
+/* ── Saltcorn 0.x / 1.x dual-export helpers ────────────────────────── */
 const TableCls =
   Table && typeof Table.findOne === 'function'
     ? Table
@@ -88,7 +84,7 @@ function buildConfigFields(fields) {
 async function resolveTable(sig) {
   const [first, second] = sig;
 
-  /* 1️⃣ Direct table_id supplied (number or numeric string) */
+  /* 1️⃣ Direct numeric table_id supplied */
   const tryNumeric = Number(
     typeof first === 'number' || typeof first === 'string' ? first : second,
   );
@@ -97,24 +93,27 @@ async function resolveTable(sig) {
     if (t) return t;
   }
 
-  /* 2️⃣ `req` object present – mine the details */
+  /* 2️⃣ Express req available? */
   const req =
     first && typeof first === 'object' && 'method' in first ? first : undefined;
   if (!req) return undefined;
 
-  /* Existing view edit – table id lives on req.view */
+  /* — 2a: editing an existing view — */
   if (req.view && req.view.table_id) {
     return TableCls.findOne({ id: req.view.table_id });
   }
 
-  /* New view wizard – ?table=<name> */
+  /* — 2b: new-view wizard (?table=) — */
   if (req.query && req.query.table) {
     return TableCls.findOne({ name: req.query.table });
   }
 
-  /* Fallback – view name in :params → look-up view → table */
+  /* — 2c: last-ditch: view name in params — */
   const viewName =
-    req.params?.name || req.params?.viewname || req.params?.0 || undefined;
+    (req.params &&
+      (req.params.name || req.params.viewname || req.params[0])) ||
+    undefined;
+
   if (viewName) {
     const vw = await ViewCls.findOne({ name: viewName });
     if (vw) return TableCls.findOne({ id: vw.table_id });
