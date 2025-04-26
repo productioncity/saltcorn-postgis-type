@@ -1,10 +1,10 @@
 /**
  * composite-map-view.js
  * -----------------------------------------------------------------------------
- * Saltcorn view-template “composite_map” – plots every geometry row on a single
+ * Saltcorn view-template “composite_map” – plots every geometry row on one
  * Leaflet map.
  *
- * Author:  Troy Kelly <troy@team.production.city>
+ * Author:  Troy Kelly  <troy@team.production.city>
  * Licence: CC0-1.0
  */
 
@@ -12,39 +12,32 @@
 
 /* eslint-disable max-lines-per-function */
 
-const Table        = require('@saltcorn/data/models/table');
-const Workflow     = require('@saltcorn/data/models/workflow');
-const Form         = require('@saltcorn/data/models/form');
+const Table    = require('@saltcorn/data/models/table');
+const Workflow = require('@saltcorn/data/models/workflow');
+const Form     = require('@saltcorn/data/models/form');
+
 const { wktToGeoJSON }            = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
 /**
- * Safe JS-literal helper (prevent “</script>” break-outs).
+ * Safe serialiser for inlined JS literals.
  *
  * @param {unknown} v
  * @returns {string}
  */
 function js(v) {
-  return JSON.stringify(v === undefined ? null : v).replace(/</g, '\\u003c');
+  return JSON.stringify(v ?? null).replace(/</g, '\\u003c');
 }
 
 /**
- * Build the configuration-form fields.  **Expects a Table instance** whose
- * `.fields` property is already populated.
+ * Build the configuration-form fields.
  *
  * @param {import('@saltcorn/data/models/table').Table|null} table
  * @returns {import('@saltcorn/types').Field[]}
  */
 function configFields(table) {
-  const opts =
-    (table?.fields || [])
-      .filter(
-        (f) =>
-          f.type &&
-          typeof f.type.name === 'string' &&
-          /(geom|point|line|string|polygon|geography)/i.test(f.type.name),
-      )
-      .map((f) => f.name) || [];
+  /* Offer every column name – the admin will pick the geometry one. */
+  const opts = (table?.fields || []).map((f) => f.name);
 
   return [
     {
@@ -77,11 +70,7 @@ function configurationWorkflow(table_id) {
         name: 'settings',
         form: async () => {
           const table = await Table.findOne({ id: table_id });
-          if (table) {
-            /* Populate table.fields so the drop-down isn’t empty */
-            table.fields = await table.getFields();
-          }
-
+          if (table) table.fields = await table.getFields();
           return new Form({ fields: configFields(table) });
         },
       },
@@ -94,13 +83,13 @@ function configurationWorkflow(table_id) {
 const compositeMapTemplate = {
   name: 'composite_map',
   description:
-    'Plots every geometry row returned by the query on one Leaflet map.',
+    'Plots every geometry row returned by the query on a single Leaflet map.',
   display_state_form: false,
   get_state_fields: () => [],
   configuration_workflow: configurationWorkflow,
 
   /**
-   * Render the map at run-time.
+   * Render the map.
    *
    * @param {number} table_id
    * @param {string} _viewname
@@ -116,19 +105,16 @@ const compositeMapTemplate = {
     const table = await Table.findOne({ id: table_id });
     const rows  = table ? await table.getRows(state) : [];
 
-    /* 2 – Convert to GeoJSON Features */
+    /* 2 – Convert geometries → GeoJSON features */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
       if (!gj) continue;
 
-      if (gj.type === 'Feature') {
-        features.push(gj);
-      } else if (gj.type === 'FeatureCollection' && Array.isArray(gj.features)) {
+      if (gj.type === 'Feature') features.push(gj);
+      else if (gj.type === 'FeatureCollection' && Array.isArray(gj.features))
         features.push(...gj.features);
-      } else {
-        features.push({ type: 'Feature', properties: {}, geometry: gj });
-      }
+      else features.push({ type: 'Feature', properties: {}, geometry: gj });
     }
     const collection = { type: 'FeatureCollection', features };
 
