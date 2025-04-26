@@ -11,19 +11,22 @@
 
 /* eslint-disable max-lines-per-function */
 
-const Table        = require('@saltcorn/data/models/table');
-const Workflow     = require('@saltcorn/data/models/workflow');
-const Form         = require('@saltcorn/data/models/form');
+const Table    = require('@saltcorn/data/models/table');
+const Workflow = require('@saltcorn/data/models/workflow');
+const Form     = require('@saltcorn/data/models/form');
+
 const { wktToGeoJSON }            = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
 /**
- * Safe JS-literal serialiser.
+ * Safe in-page JS literal serialiser.
  *
  * @param {unknown} v
  * @returns {string}
  */
 const js = (v) => JSON.stringify(v ?? null).replace(/</g, '\\u003c');
+
+/* ───────────────────────── Configuration form helpers ─────────────────── */
 
 /**
  * Build the configuration-form fields from a raw field list.
@@ -32,7 +35,7 @@ const js = (v) => JSON.stringify(v ?? null).replace(/</g, '\\u003c');
  * @returns {import('@saltcorn/types').Field[]}
  */
 function buildConfigFields(fields) {
-  const opts = fields.map((f) => f.name);          // every column, no filter
+  const opts = fields.map((f) => f.name); // show every column
 
   return [
     {
@@ -53,19 +56,25 @@ function buildConfigFields(fields) {
 }
 
 /**
- * Workflow that Saltcorn shows when the admin creates / edits the view.
+ * Saltcorn Workflow shown when the admin creates / edits the view.
  *
- * @param {number} table_id
+ * @param {number|string} tableRef  May be numeric id **or** table-name.
  * @returns {import('@saltcorn/data/models/workflow').Workflow}
  */
-function configurationWorkflow(table_id) {
+function configurationWorkflow(tableRef) {
   return new Workflow({
     steps: [
       {
         name: 'settings',
         form: async () => {
-          const table  = await Table.findOne({ id: table_id });
+          /* Resolve table by id OR name so it always succeeds */
+          const where =
+            typeof tableRef === 'number'
+              ? { id: tableRef }
+              : { name: tableRef };
+          const table  = await Table.findOne(where);
           const fields = table ? await table.getFields() : [];
+
           return new Form({ fields: buildConfigFields(fields) });
         },
       },
@@ -84,23 +93,24 @@ const compositeMapTemplate = {
   configuration_workflow: configurationWorkflow,
 
   /**
-   * Render the map at runtime.
+   * Render the map at run-time.
    *
-   * @param {number} table_id
+   * @param {number|string} tableRef
    * @param {string} _viewname
    * @param {{geometry_field:string,height?:number}} cfg
    * @param {object} state
    * @returns {Promise<string>}
    */
-  async run(table_id, _viewname, cfg, state) {
+  async run(tableRef, _viewname, cfg, state) {
     const geomCol = cfg.geometry_field || 'geom';
     const height  = Number(cfg.height) || 300;
 
-    /* 1 – Fetch rows */
-    const table = await Table.findOne({ id: table_id });
+    const where =
+      typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef };
+    const table = await Table.findOne(where);
     const rows  = table ? await table.getRows(state) : [];
 
-    /* 2 – Convert geometries → GeoJSON features */
+    /* Convert geometries → GeoJSON Features */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
@@ -111,12 +121,12 @@ const compositeMapTemplate = {
         features.push(...gj.features);
       else features.push({ type: 'Feature', properties: {}, geometry: gj });
     }
-    const collection = { type: 'FeatureCollection', features };
 
-    /* 3 – HTML / JS payload */
-    const mapId = `cmp_${Math.random().toString(36).slice(2)}`;
+    const collection = { type: 'FeatureCollection', features };
+    const mapId      = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
+    /* HTML + JS payload */
     return `
 <div id="${mapId}" class="border rounded" style="height:${height}px;"></div>
 <script>
