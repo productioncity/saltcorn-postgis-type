@@ -3,6 +3,9 @@
  * -----------------------------------------------------------------------------
  * View-template “composite_map” – plots every geometry row on one Leaflet map.
  *
+ * This revision adds **extensive debug logging** so we can see exactly what
+ * Saltcorn hands us at every stage.
+ *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0-1.0
  */
@@ -11,27 +14,32 @@
 
 /* eslint-disable max-lines-per-function */
 
-const Table    = require('@saltcorn/data/models/table');
-const Workflow = require('@saltcorn/data/models/workflow');
-const Form     = require('@saltcorn/data/models/form');
-
-const { wktToGeoJSON }        = require('../utils/geometry');
+const Table        = require('@saltcorn/data/models/table');
+const Workflow     = require('@saltcorn/data/models/workflow');
+const Form         = require('@saltcorn/data/models/form');
+const dbg          = require('../utils/debug');
+const { wktToGeoJSON }            = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
-/* ───────────────────────── Helper ───────────────────────── */
-
+/**
+ * Safe inline-JS literal helper.
+ *
+ * @param {unknown} v
+ * @returns {string}
+ */
 const js = (v) => JSON.stringify(v ?? null).replace(/</g, '\\u003c');
 
+/* ───────────────────────── Configuration helpers ───────────────────────── */
+
 /**
- * Build config-form fields from a raw field list.
+ * Build the Configuration-form field list.
  *
  * @param {import('@saltcorn/types').Field[]} fields
  * @returns {import('@saltcorn/types').Field[]}
  */
 function buildConfigFields(fields) {
-  /* —— no filtering at all, take every column name —— */
   const opts = fields.map((f) => f.name);
-
+  dbg.info('buildConfigFields()', { opts });
   return [
     {
       name: 'geometry_field',
@@ -51,12 +59,14 @@ function buildConfigFields(fields) {
 }
 
 /**
- * Workflow shown in the Saltcorn GUI.
+ * Workflow shown in the Saltcorn GUI when the admin sets up the view.
  *
- * @param {number|string} tableRef
+ * @param {number|string} tableRef  May be numeric id **or** table-name.
  * @returns {import('@saltcorn/data/models/workflow').Workflow}
  */
 function configurationWorkflow(tableRef) {
+  dbg.info('configurationWorkflow() invoked', { tableRef });
+
   return new Workflow({
     steps: [
       {
@@ -64,8 +74,13 @@ function configurationWorkflow(tableRef) {
         form: async () => {
           const where =
             typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef };
-          const table  = await Table.findOne(where);
+
+          const table = await Table.findOne(where);
+          dbg.info('Table.findOne()', { where, found: !!table });
+
           const fields = table ? await table.getFields() : [];
+          dbg.info('table.getFields()', { count: fields.length, fields });
+
           return new Form({ fields: buildConfigFields(fields) });
         },
       },
@@ -73,7 +88,7 @@ function configurationWorkflow(tableRef) {
   });
 }
 
-/* ───────────────────────── View-template ───────────────────────── */
+/* ───────────────────────── View-template object ───────────────────────── */
 
 const compositeMapTemplate = {
   name: 'composite_map',
@@ -84,7 +99,7 @@ const compositeMapTemplate = {
   configuration_workflow: configurationWorkflow,
 
   /**
-   * Render map.
+   * Render the map at run-time.
    *
    * @param {number|string} tableRef
    * @param {string} _viewname
@@ -93,41 +108,66 @@ const compositeMapTemplate = {
    * @returns {Promise<string>}
    */
   async run(tableRef, _viewname, cfg, state) {
+    dbg.info('composite_map.run()', { tableRef, cfg, state });
+
     const geomCol = cfg.geometry_field || 'geom';
     const height  = Number(cfg.height) || 300;
 
     const where =
       typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef };
     const table = await Table.findOne(where);
-    const rows  = table ? await table.getRows(state) : [];
 
+    if (!table) {
+      dbg.error('Table not found at run-time', { where });
+      return '<div class="alert alert-danger">Table not found.</div>';
+    }
+
+    const rows = await table.getRows(state);
+    dbg.info('Rows fetched', { count: rows.length });
+
+    /* Convert geometries → GeoJSON Features */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
       if (!gj) continue;
-      if (gj.type === 'Feature')                     features.push(gj);
-      else if (gj.type === 'FeatureCollection')      features.push(...gj.features);
-      else                                           features.push({ type: 'Feature', properties: {}, geometry: gj });
-    }
 
-    const mapId = `cmp_${Math.random().toString(36).slice(2)}`;
+      if (gj.type === 'Feature')                    features.push(gj);
+      else if (gj.type === 'FeatureCollection' &&
+               Array.isArray(gj.features))          features.push(...gj.features);
+      else                                          features.push({ type: 'Feature', properties: {}, geometry: gj });
+    }
+    dbg.info('Features built', { count: features.length });
+
+    const collection = { type: 'FeatureCollection', features };
+    const mapId      = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
+    /* HTML + JS payload */
     return `
 <div id="${mapId}" class="border rounded" style="height:${height}px;"></div>
 <script>
 (function(){
   const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
-        geo=${js({ type:'FeatureCollection', features })},
-        id=${js(mapId)};
+        geo=${js(collection)}, id=${js(mapId)};
+
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
   function haveJs(s){return !!(document._loadedScripts&&document._loadedScripts[s]);}
-  function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;document.head.appendChild(l);});}
-  function loadJs(s){return new Promise(r=>{if(haveJs(s))return r();const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};document.head.appendChild(sc);});}
+  function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
+    const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;
+    document.head.appendChild(l);});}
+  function loadJs(s){return new Promise(r=>{if(haveJs(s))return r();
+    const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){
+      document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
+    document.head.appendChild(sc);});}
+
   (async()=>{await loadCss(css);await loadJs(jsSrc);
     const m=L.map(id).setView([${lat},${lng}],${zoom});
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'&copy; OpenStreetMap' }).addTo(m);
-    if(geo.features.length){const l=L.geoJSON(geo).addTo(m);m.fitBounds(l.getBounds(),{maxZoom:14});}
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { attribution:'&copy; OpenStreetMap' }).addTo(m);
+    if(geo.features.length){
+      const l=L.geoJSON(geo).addTo(m);
+      m.fitBounds(l.getBounds(),{maxZoom:14});
+    }
   })();
 })();
 </script>`;
