@@ -2,7 +2,8 @@
  * composite-map-view.js
  * -----------------------------------------------------------------------------
  * Saltcorn view-template “composite_map” – plots every geometry row returned by
- * the query on a single Leaflet map.
+ * the query on a single Leaflet map and now supports pop-ups and click-through
+ * navigation.
  *
  * Author:   Troy Kelly <troy@team.production.city>
  * Licence:  CC0-1.0
@@ -19,24 +20,18 @@ const dbg              = require('../utils/debug');
 const { wktToGeoJSON } = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
-/* ── Saltcorn 0.x / 1.x dual-export helpers ────────────────────────── */
+/* Saltcorn 0.x / 1.x dual-export helpers */
 const TableCls =
-  Table && typeof Table.findOne === 'function'
-    ? Table
-    : Table && Table.Table
-      ? Table.Table
-      : Table;
+  Table && typeof Table.findOne === 'function' ? Table
+    : Table && Table.Table ? Table.Table : Table;
 
 const ViewMod = require('@saltcorn/data/models/view');
 const ViewCls =
-  ViewMod && typeof ViewMod.findOne === 'function'
-    ? ViewMod
-    : ViewMod && ViewMod.View
-      ? ViewMod.View
-      : ViewMod;
+  ViewMod && typeof ViewMod.findOne === 'function' ? ViewMod
+    : ViewMod && ViewMod.View ? ViewMod.View : ViewMod;
 
 /**
- * Safely embed *anything* as a JS literal (prevents </script> bust-outs).
+ * String-safe JSON embedder – prevents </script> break-outs.
  *
  * @param {unknown} v
  * @returns {string}
@@ -45,7 +40,7 @@ function js(v) {
   return JSON.stringify(v ?? null).replace(/</g, '\\u003c');
 }
 
-/* ───────────────────────── Configuration helpers ───────────────────────── */
+/* ───────────────────────────── Config helpers ─────────────────────────── */
 
 /**
  * Build the configuration-form fields.
@@ -54,8 +49,7 @@ function js(v) {
  * @returns {import('@saltcorn/types').Field[]}
  */
 function buildConfigFields(fields) {
-  const opts = fields.map((f) => f.name);
-  dbg.info('buildConfigFields()', { opts });
+  const fieldOpts = fields.map((f) => f.name);
 
   return [
     {
@@ -63,7 +57,20 @@ function buildConfigFields(fields) {
       label: 'Geometry column',
       type: 'String',
       required: true,
-      attributes: { options: opts },
+      attributes: { options: fieldOpts },
+    },
+    {
+      name: 'popup_field',
+      label: 'Popup text field (optional)',
+      type: 'String',
+      required: false,
+      attributes: { options: fieldOpts },
+    },
+    {
+      name: 'click_view',
+      label: 'Navigate to view on click (optional)',
+      sublabel: 'Leave blank for no navigation. Row id is passed as ?id=…',
+      type: 'String',
     },
     {
       name: 'height',
@@ -76,46 +83,35 @@ function buildConfigFields(fields) {
 }
 
 /**
- * Attempt to locate the Table instance regardless of how Saltcorn invoked us.
+ * Try every known call-signature to identify the target Table.
  *
- * @param {unknown[]} sig  Raw configurationWorkflow arguments.
+ * @param {unknown[]} sig
  * @returns {Promise<import('@saltcorn/types').Table|undefined>}
  */
 async function resolveTable(sig) {
   const [first, second] = sig;
 
-  /* 1️⃣ Direct numeric table_id supplied */
-  const tryNumeric = Number(
+  /* Direct numeric id? */
+  const num = Number(
     typeof first === 'number' || typeof first === 'string' ? first : second,
   );
-  if (Number.isFinite(tryNumeric) && tryNumeric > 0) {
-    const t = await TableCls.findOne({ id: tryNumeric });
+  if (Number.isFinite(num) && num > 0) {
+    const t = await TableCls.findOne({ id: num });
     if (t) return t;
   }
 
-  /* 2️⃣ Express req available? */
   const req =
     first && typeof first === 'object' && 'method' in first ? first : undefined;
   if (!req) return undefined;
 
-  /* — 2a: editing an existing view — */
-  if (req.view && req.view.table_id) {
-    return TableCls.findOne({ id: req.view.table_id });
-  }
+  if (req.view?.table_id) return TableCls.findOne({ id: req.view.table_id });
+  if (req.query?.table)   return TableCls.findOne({ name: req.query.table });
 
-  /* — 2b: new-view wizard (?table=) — */
-  if (req.query && req.query.table) {
-    return TableCls.findOne({ name: req.query.table });
-  }
-
-  /* — 2c: last-ditch: view name in params — */
-  const viewName =
-    (req.params &&
-      (req.params.name || req.params.viewname || req.params[0])) ||
+  const vn =
+    (req.params && (req.params.name || req.params.viewname || req.params[0])) ||
     undefined;
-
-  if (viewName) {
-    const vw = await ViewCls.findOne({ name: viewName });
+  if (vn) {
+    const vw = await ViewCls.findOne({ name: vn });
     if (vw) return TableCls.findOne({ id: vw.table_id });
   }
 
@@ -123,31 +119,27 @@ async function resolveTable(sig) {
 }
 
 /**
- * Saltcorn calls configurationWorkflow with wildly different signatures.
+ * Universal configuration workflow.
  *
  * @param {...unknown} sig
  * @returns {import('@saltcorn/data/models/workflow').Workflow}
  */
 function configurationWorkflow(...sig) {
-  dbg.info('configurationWorkflow()', { rawSignature: sig });
-
   return new Workflow({
     steps: [
       {
         name: 'settings',
         form: async () => {
-          const table = await resolveTable(sig);
-          dbg.info('Table.findOne()', { found: !!table });
-          const fields = table ? await table.getFields() : [];
-          dbg.info('getFields()', { count: fields.length });
-          return new Form({ fields: buildConfigFields(fields) });
+          const tbl   = await resolveTable(sig);
+          const flds  = tbl ? await tbl.getFields() : [];
+          return new Form({ fields: buildConfigFields(flds) });
         },
       },
     ],
   });
 }
 
-/* ───────────────────────── View-template object ───────────────────────── */
+/* ───────────────────────────── View template ─────────────────────────── */
 
 const compositeMapTemplate = {
   name: 'composite_map',
@@ -160,56 +152,50 @@ const compositeMapTemplate = {
   /**
    * Runtime renderer.
    *
-   * @param {number|string} tableRef  Numeric id or name string.
-   * @param {string} _viewname        (unused – required by Saltcorn signature)
-   * @param {{geometry_field:string,height?:number}} cfg
+   * @param {number|string} tableRef  Table id or name.
+   * @param {string} _viewname        (unused)
+   * @param {{geometry_field:string,height?:number,popup_field?:string,click_view?:string}} cfg
    * @param {object} state
-   * @returns {Promise<string>} HTML payload.
+   * @returns {Promise<string>}
    */
   async run(tableRef, _viewname, cfg, state) {
-    dbg.info('composite_map.run()', { tableRef, cfg, state });
-
-    const geomCol = cfg.geometry_field || 'geom';
-    const height  = Number(cfg.height) || 300;
+    const geomCol    = cfg.geometry_field || 'geom';
+    const popupField = cfg.popup_field  || '';
+    const clickView  = cfg.click_view   || '';
+    const height     = Number(cfg.height) || 300;
 
     const where =
       typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef };
     const table = await TableCls.findOne(where);
-    if (!table) {
-      dbg.error('Table not found at run-time', { where });
-      return '<div class="alert alert-danger">Table not found.</div>';
-    }
+    if (!table) return '<div class="alert alert-danger">Table not found.</div>';
 
     const rows = await table.getRows(state);
-    dbg.info('Rows fetched', { count: rows.length });
 
-    /* Convert geometries to GeoJSON Features */
+    /* Build FeatureCollection */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
       if (!gj) continue;
 
-      if (gj.type === 'Feature') {
-        features.push(gj);
-      } else if (gj.type === 'FeatureCollection' && Array.isArray(gj.features)) {
-        features.push(...gj.features);
-      } else {
-        features.push({ type: 'Feature', properties: {}, geometry: gj });
-      }
+      features.push({
+        type: 'Feature',
+        properties: { __id: row.id, ...row },
+        geometry:   gj.type === 'Feature' ? gj.geometry : gj,
+      });
     }
-    dbg.info('Features built', { count: features.length });
 
     const collection = { type: 'FeatureCollection', features };
     const mapId      = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
-    /* HTML + JS payload */
+    /* ─────── HTML + JS payload ─────── */
     return `
 <div id="${mapId}" class="border rounded" style="height:${height}px;"></div>
 <script>
 (function(){
   const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
-        geo=${js(collection)}, id=${js(mapId)};
+        geo=${js(collection)}, id=${js(mapId)},
+        lbl=${js(popupField)}, navView=${js(clickView)};
 
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
   function haveJs(s){return !!(document._loadedScripts&&document._loadedScripts[s]);}
@@ -225,10 +211,18 @@ const compositeMapTemplate = {
     const m=L.map(id).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       { attribution:'&copy; OpenStreetMap' }).addTo(m);
-    if(geo.features.length){
-      const l=L.geoJSON(geo).addTo(m);
-      m.fitBounds(l.getBounds(),{maxZoom:14});
-    }
+
+    const layer=L.geoJSON(geo,{
+      onEachFeature:function(f,l){
+        if(lbl&&f.properties&&f.properties[lbl]!==undefined)
+          l.bindPopup(String(f.properties[lbl]));
+        if(navView&&f.properties&&f.properties.__id){
+          l.on('click',()=>{window.location.href='/view/'+navView+'?id='+f.properties.__id;});
+        }
+      }
+    }).addTo(m);
+
+    if(layer.getLayers().length) m.fitBounds(layer.getBounds(),{maxZoom:14});
   })();
 })();
 </script>`;
