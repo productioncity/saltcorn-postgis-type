@@ -15,27 +15,22 @@ const Table    = require('@saltcorn/data/models/table');
 const Workflow = require('@saltcorn/data/models/workflow');
 const Form     = require('@saltcorn/data/models/form');
 
-const { wktToGeoJSON }            = require('../utils/geometry');
+const { wktToGeoJSON }        = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
-/**
- * Safe in-page JS literal serialiser.
- *
- * @param {unknown} v
- * @returns {string}
- */
+/* ───────────────────────── Helper ───────────────────────── */
+
 const js = (v) => JSON.stringify(v ?? null).replace(/</g, '\\u003c');
 
-/* ───────────────────────── Configuration form helpers ─────────────────── */
-
 /**
- * Build the configuration-form fields from a raw field list.
+ * Build config-form fields from a raw field list.
  *
  * @param {import('@saltcorn/types').Field[]} fields
  * @returns {import('@saltcorn/types').Field[]}
  */
 function buildConfigFields(fields) {
-  const opts = fields.map((f) => f.name); // show every column
+  /* —— no filtering at all, take every column name —— */
+  const opts = fields.map((f) => f.name);
 
   return [
     {
@@ -56,9 +51,9 @@ function buildConfigFields(fields) {
 }
 
 /**
- * Saltcorn Workflow shown when the admin creates / edits the view.
+ * Workflow shown in the Saltcorn GUI.
  *
- * @param {number|string} tableRef  May be numeric id **or** table-name.
+ * @param {number|string} tableRef
  * @returns {import('@saltcorn/data/models/workflow').Workflow}
  */
 function configurationWorkflow(tableRef) {
@@ -67,14 +62,10 @@ function configurationWorkflow(tableRef) {
       {
         name: 'settings',
         form: async () => {
-          /* Resolve table by id OR name so it always succeeds */
           const where =
-            typeof tableRef === 'number'
-              ? { id: tableRef }
-              : { name: tableRef };
+            typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef };
           const table  = await Table.findOne(where);
           const fields = table ? await table.getFields() : [];
-
           return new Form({ fields: buildConfigFields(fields) });
         },
       },
@@ -82,7 +73,7 @@ function configurationWorkflow(tableRef) {
   });
 }
 
-/* ───────────────────────── View-template object ───────────────────────── */
+/* ───────────────────────── View-template ───────────────────────── */
 
 const compositeMapTemplate = {
   name: 'composite_map',
@@ -93,7 +84,7 @@ const compositeMapTemplate = {
   configuration_workflow: configurationWorkflow,
 
   /**
-   * Render the map at run-time.
+   * Render map.
    *
    * @param {number|string} tableRef
    * @param {string} _viewname
@@ -110,54 +101,33 @@ const compositeMapTemplate = {
     const table = await Table.findOne(where);
     const rows  = table ? await table.getRows(state) : [];
 
-    /* Convert geometries → GeoJSON Features */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
       if (!gj) continue;
-
-      if (gj.type === 'Feature') features.push(gj);
-      else if (gj.type === 'FeatureCollection' && Array.isArray(gj.features))
-        features.push(...gj.features);
-      else features.push({ type: 'Feature', properties: {}, geometry: gj });
+      if (gj.type === 'Feature')                     features.push(gj);
+      else if (gj.type === 'FeatureCollection')      features.push(...gj.features);
+      else                                           features.push({ type: 'Feature', properties: {}, geometry: gj });
     }
 
-    const collection = { type: 'FeatureCollection', features };
-    const mapId      = `cmp_${Math.random().toString(36).slice(2)}`;
+    const mapId = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
-    /* HTML + JS payload */
     return `
 <div id="${mapId}" class="border rounded" style="height:${height}px;"></div>
 <script>
 (function(){
-  const LEAF_CSS=${js(LEAFLET.css)};
-  const LEAF_JS=${js(LEAFLET.js)};
-  const MAP_ID=${js(mapId)};
-  const GEOJSON=${js(collection)};
-
+  const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
+        geo=${js({ type:'FeatureCollection', features })},
+        id=${js(mapId)};
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
   function haveJs(s){return !!(document._loadedScripts&&document._loadedScripts[s]);}
-  function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
-    const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;
-    document.head.appendChild(l);});}
-  function loadJs(s){return new Promise(r=>{if(haveJs(s))return r();
-    const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){
-      document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
-    document.head.appendChild(sc);});}
-
-  (async function init(){
-    await loadCss(LEAF_CSS); await loadJs(LEAF_JS);
-
-    const map=L.map(MAP_ID).setView([${lat},${lng}],${zoom});
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-      attribution:'&copy; OpenStreetMap contributors'
-    }).addTo(map);
-
-    if(GEOJSON.features.length){
-      const layer=L.geoJSON(GEOJSON).addTo(map);
-      map.fitBounds(layer.getBounds(),{maxZoom:14});
-    }
+  function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;document.head.appendChild(l);});}
+  function loadJs(s){return new Promise(r=>{if(haveJs(s))return r();const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};document.head.appendChild(sc);});}
+  (async()=>{await loadCss(css);await loadJs(jsSrc);
+    const m=L.map(id).setView([${lat},${lng}],${zoom});
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'&copy; OpenStreetMap' }).addTo(m);
+    if(geo.features.length){const l=L.geoJSON(geo).addTo(m);m.fitBounds(l.getBounds(),{maxZoom:14});}
   })();
 })();
 </script>`;
