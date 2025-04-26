@@ -1,7 +1,8 @@
 /**
  * composite-map-view.js
  * -----------------------------------------------------------------------------
- * Saltcorn view-template “composite_map” – shows every geometry row on one map.
+ * Saltcorn view-template “composite_map” – plots every geometry row on a single
+ * Leaflet map.
  *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0-1.0
@@ -11,15 +12,14 @@
 
 /* eslint-disable max-lines-per-function */
 
-const Table    = require('@saltcorn/data/models/table');
-const Workflow = require('@saltcorn/data/models/workflow');
-const Form     = require('@saltcorn/data/models/form');
-
+const Table        = require('@saltcorn/data/models/table');
+const Workflow     = require('@saltcorn/data/models/workflow');
+const Form         = require('@saltcorn/data/models/form');
 const { wktToGeoJSON }            = require('../utils/geometry');
 const { LEAFLET, DEFAULT_CENTER } = require('../constants');
 
 /**
- * Serialise *anything* to a safe inline-JS literal.
+ * Safe JS-literal helper (prevent “</script>” break-outs).
  *
  * @param {unknown} v
  * @returns {string}
@@ -29,14 +29,15 @@ function js(v) {
 }
 
 /**
- * Build the configuration-form fields.
+ * Build the configuration-form fields.  **Expects a Table instance** whose
+ * `.fields` property is already populated.
  *
- * @param {{fields: import('@saltcorn/types').Field[]}} ctx
+ * @param {import('@saltcorn/data/models/table').Table|null} table
  * @returns {import('@saltcorn/types').Field[]}
  */
-function configFields({ fields }) {
+function configFields(table) {
   const opts =
-    (fields || [])
+    (table?.fields || [])
       .filter(
         (f) =>
           f.type &&
@@ -64,7 +65,7 @@ function configFields({ fields }) {
 }
 
 /**
- * Saltcorn workflow that presents the config form.
+ * Workflow shown when the user creates / edits the view.
  *
  * @param {number} table_id
  * @returns {import('@saltcorn/data/models/workflow').Workflow}
@@ -75,10 +76,13 @@ function configurationWorkflow(table_id) {
       {
         name: 'settings',
         form: async () => {
-          const table  = await Table.findOne({ id: table_id });
-          const fields = table ? await table.getFields() : [];
-          /* Pass a fake object exposing `.fields` so configFields works */
-          return new Form({ fields: configFields({ fields }) });
+          const table = await Table.findOne({ id: table_id });
+          if (table) {
+            /* Populate table.fields so the drop-down isn’t empty */
+            table.fields = await table.getFields();
+          }
+
+          return new Form({ fields: configFields(table) });
         },
       },
     ],
@@ -90,13 +94,13 @@ function configurationWorkflow(table_id) {
 const compositeMapTemplate = {
   name: 'composite_map',
   description:
-    'Plots every geometry row in the result-set on a single Leaflet map.',
+    'Plots every geometry row returned by the query on one Leaflet map.',
   display_state_form: false,
   get_state_fields: () => [],
   configuration_workflow: configurationWorkflow,
 
   /**
-   * Render the composite map.
+   * Render the map at run-time.
    *
    * @param {number} table_id
    * @param {string} _viewname
@@ -108,11 +112,11 @@ const compositeMapTemplate = {
     const geomCol = cfg.geometry_field || 'geom';
     const height  = Number(cfg.height) || 300;
 
-    /* --- 1. Fetch data -------------------------------------------------- */
+    /* 1 – Fetch rows */
     const table = await Table.findOne({ id: table_id });
     const rows  = table ? await table.getRows(state) : [];
 
-    /* --- 2. Build GeoJSON collection ----------------------------------- */
+    /* 2 – Convert to GeoJSON Features */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
@@ -128,7 +132,7 @@ const compositeMapTemplate = {
     }
     const collection = { type: 'FeatureCollection', features };
 
-    /* --- 3. HTML/JS payload -------------------------------------------- */
+    /* 3 – HTML/JS payload */
     const mapId = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
