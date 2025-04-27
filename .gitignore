@@ -326,3 +326,5 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+!scripts/populate-public.js
