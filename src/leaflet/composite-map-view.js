@@ -1,19 +1,21 @@
 /**
  * composite-map-view.js
  * -----------------------------------------------------------------------------
- * View-template “composite_map” – plots every geometry row returned by the
- * query on one interactive Leaflet map.  Version 4 adds **Leaflet-providers**
- * integration with an administrator friendly drop-down list populated
- * automatically from the bundled providers script.
+ * View-template “composite_map”
  *
- * v4 – 2025-04-27
- *   • Providers parsed server-side via `vm` – zero maintenance.
- *   • 2-page wizard: ① Data & Pop-ups, ② Tile Provider (with drop-down).
- *   • Only loads the heavy providers JS in the browser when actually used.
- *   • Full debug instrumentation – gated by `PLUGIN_DEBUG`.
+ * Plots every geometry row returned by the query on a Leaflet map.  
+ * Administrators can optionally select **any** of the 200 + community basemaps
+ * provided by the bundled Leaflet-providers add-on.  The heavy providers JS is
+ * loaded in the browser only when a view is configured to use it.
  *
- * Author:  Troy Kelly <troy@team.production.city>
- * Licence: CC0-1.0
+ * v4.1 – 2025-04-27
+ *   • Robust provider list parsing – now supplies a working drop-down even in
+ *     ultra-restricted server environments.
+ *   • Graceful degradation: if the list cannot be parsed, a single fallback
+ *     option keeps the wizard usable (and validation passes).
+ *
+ * Author:      Troy Kelly <troy@team.production.city>
+ * Licence:     CC0-1.0
  */
 
 'use strict';
@@ -38,7 +40,7 @@ const {
   PLUGIN_DEBUG,
 } = require('../constants');
 
-/* Optional: runtime Handlebars (lazy-loaded via CDN in browser) */
+/* Optional: runtime Handlebars (lazy-loaded via CDN in the browser) */
 const HANDLEBARS_CDN =
   'https://cdn.jsdelivr.net/npm/handlebars@4.7.7/dist/handlebars.min.js';
 
@@ -46,8 +48,8 @@ const HANDLEBARS_CDN =
 
 const TableCls = Table?.findOne ? Table : Table?.Table ? Table.Table : Table;
 
-const ViewMod = require('@saltcorn/data/models/view');
-const ViewCls = ViewMod?.findOne ? ViewMod : ViewMod?.View ? ViewMod.View : ViewMod;
+const ViewMod  = require('@saltcorn/data/models/view');
+const ViewCls  = ViewMod?.findOne ? ViewMod : ViewMod?.View ? ViewMod.View : ViewMod;
 
 /* ───────────────────────────── helpers ──────────────────────────────── */
 
@@ -62,17 +64,35 @@ function js(v) {
 }
 
 /**
- * Lazy loader that parses `leaflet-providers.js` once and returns an alphabetic
- * array of provider keys accepted by `L.tileLayer.provider()`.
+ * Parse the bundled `leaflet-providers.js` and extract every valid provider
+ * key.  Executed once per Node process – the result is cached.
  *
- * The parsing happens in a sandboxed `vm` context with a stub Leaflet object
- * so the upstream add-on registers its provider catalogue without polluting
- * the real environment.  The result is cached for the lifetime of the process.
+ * For total safety the file is executed inside a sandboxed `vm` context with
+ * a fully stubbed fake Leaflet implementation just sufficient for the add-on
+ * to populate its catalogue.
  *
- * @returns {string[]}
+ * @returns {string[]} Sorted array of provider keys (`Provider` or
+ *                     `Provider.Variant`).  May be empty when parsing fails.
  */
 function getProviderOptions() {
   if (getProviderOptions._cache) return getProviderOptions._cache;
+
+  /* ───── Sandbox scaffolding ───── */
+  function makeFakeLeaflet() {
+    /* Minimal stub fulfilling exactly what the add-on references. */
+    function TileLayerCtor() {}
+    TileLayerCtor.prototype.initialize = () => {};
+    TileLayerCtor.extend = () => TileLayerCtor; // simple pass-through
+
+    return {
+      /* Utility helper used by the add-on */
+      Util: {
+        extend: (...objs) => Object.assign({}, ...objs),
+      },
+      /* Core TileLayer “class” */
+      TileLayer: TileLayerCtor,
+    };
+  }
 
   try {
     const filePath = path.resolve(
@@ -81,61 +101,54 @@ function getProviderOptions() {
     );
     const code = fs.readFileSync(filePath, 'utf8');
 
-    /* Minimal Leaflet stub – just enough for the add-on to attach providers. */
-    const stubL = {
-      Util: { extend: (...objs) => Object.assign({}, ...objs) },
-      TileLayer: {
-        extend: () => function () {}, // noop constructor
-        Provider: {},
-      },
-    };
-
-    /* The upstream IIFE uses `this` as the root argument. */
     const sandbox = {
-      L: stubL,
-      console,                 // allow debugging inside the sandbox
-      define: undefined,       // pretend AMD absent
+      L: makeFakeLeaflet(),
+      /* globals poked by the UMD wrapper */
+      console,
+      define: undefined,
       modules: undefined,
-      module: {},              // CommonJS test will fail (uses `modules`)
+      module: { exports: {} },
       exports: {},
-      require: () => ({}),     // “leaflet” shim
+      require: () => ({}),
     };
     vm.createContext(sandbox);
 
-    /* Execute the add-on – this will populate `L.TileLayer.Provider.providers`. */
+    /* Execute – this fills L.TileLayer.Provider.providers */
     vm.runInContext(code, sandbox, { filename: 'leaflet-providers.js' });
 
-    const providersObj = sandbox.L.TileLayer.Provider.providers || {};
+    const providersObj =
+      sandbox.L?.TileLayer?.Provider?.providers || Object.create(null);
+
     /** @type {string[]} */
     const out = [];
-
-    for (const [pName, pObj] of Object.entries(providersObj)) {
-      out.push(pName);
-      if (pObj && pObj.variants) {
-        for (const v of Object.keys(pObj.variants)) out.push(`${pName}.${v}`);
+    for (const [providerName, providerDef] of Object.entries(providersObj)) {
+      out.push(providerName);
+      if (providerDef && providerDef.variants) {
+        for (const variant of Object.keys(providerDef.variants)) {
+          out.push(`${providerName}.${variant}`);
+        }
       }
     }
-    out.sort((a, b) => a.localeCompare(b));
+    out.sort((a, b) => a.localeCompare(b, 'en'));
 
     dbg.info('Leaflet provider list parsed', { count: out.length });
     getProviderOptions._cache = out;
     return out;
   } catch (err) {
-    dbg.error('Failed to parse leaflet-providers list – falling back.', err);
+    dbg.error('Failed to parse leaflet-providers list – continuing without it.', err);
     getProviderOptions._cache = [];
     return [];
   }
 }
 
 /**
- * Derive <select> options from table fields.
+ * Build select-field options list for page 1 (data & pop-ups).
  *
  * @param {import('@saltcorn/types').Field[]} fields
  * @returns {import('@saltcorn/types').TypeAttribute[]}
  */
 function buildDataFields(fields) {
-  const opts = fields.map((f) => f.name);
-  dbg.debug('buildDataFields()', { opts });
+  const colOpts = fields.map((f) => f.name);
 
   return [
     /* ───── BASIC ───── */
@@ -144,22 +157,22 @@ function buildDataFields(fields) {
       label: 'Geometry column',
       type: 'String',
       required: true,
-      attributes: { options: opts },
+      attributes: { options: colOpts },
     },
     {
       name: 'popup_field',
       label: 'Popup text field',
       sublabel:
-        'Simple text from this column. Ignored when “Popup template” is set.',
+        'Simple text from this column (ignored when “Popup template” is set).',
       type: 'String',
-      attributes: { options: opts },
+      attributes: { options: colOpts },
     },
     {
       name: 'popup_template',
       label: 'Popup Handlebars template',
       sublabel:
-        'Optional. Uses Handlebars ‑ row fields are available directly. ' +
-        'Examples: {{name}}, {{#if status}}{{status}}{{/if}}.',
+        'Optional. Uses Handlebars – row fields are available directly, e.g. ' +
+        '{{name}} or {{#if status}}{{status}}{{/if}}.',
       type: 'String',
       attributes: { input_type: 'textarea', rows: 3 },
     },
@@ -167,16 +180,15 @@ function buildDataFields(fields) {
       name: 'icon_template',
       label: 'Point icon template',
       sublabel:
-        'Optional. Handlebars supported. ' +
-        'Return HTML (e.g. <i class="fas fa-car"></i>) or an image URL. ' +
-        'Examples: {{icon_html}} or {{icon_url}}.',
+        'Optional Handlebars.  Return HTML (e.g. <i class="…">) *or* an image ' +
+        'URL.  Examples: {{icon_html}} or {{icon_url}}.',
       type: 'String',
       attributes: { input_type: 'textarea', rows: 2 },
     },
     {
       name: 'click_view',
       label: 'Navigate to view on click (optional)',
-      sublabel: 'Leave blank for no navigation. Row id is passed as ?id=…',
+      sublabel: 'Leave blank for no navigation.  Row id is passed as ?id=…',
       type: 'String',
     },
 
@@ -190,16 +202,16 @@ function buildDataFields(fields) {
     {
       name: 'create_view',
       label: 'Target create view',
-      sublabel: 'Ignored if the above toggle is off.',
+      sublabel: 'Ignored if the toggle above is OFF.',
       type: 'String',
     },
 
-    /* ───── OPTIONS ───── */
+    /* ───── MISC OPTIONS ───── */
     {
       name: 'order_field',
       label: 'Default order by',
       type: 'String',
-      attributes: { options: opts },
+      attributes: { options: colOpts },
     },
     {
       name: 'order_desc',
@@ -211,10 +223,10 @@ function buildDataFields(fields) {
       name: 'group_field',
       label: 'Group by column (optional)',
       sublabel:
-        'Colour markers by discrete values in this column. ' +
-        'Ignored when an Icon template is provided.',
+        'Colour markers by discrete values in this column (ignored when an ' +
+        'Icon template is provided).',
       type: 'String',
-      attributes: { options: opts },
+      attributes: { options: colOpts },
     },
     {
       name: 'row_limit',
@@ -234,13 +246,19 @@ function buildDataFields(fields) {
 }
 
 /**
- * Second wizard page – tile provider settings (drop-down).
+ * Wizard page 2 – tile provider settings.
  *
  * @returns {import('@saltcorn/types').TypeAttribute[]}
  */
 function buildProviderFields() {
   const providerOptions = getProviderOptions();
-  dbg.debug('buildProviderFields()', { providerOptionsSample: providerOptions.slice(0, 5) });
+
+  /* Saltcorn treats an empty options list as “no <select> possible” – in that
+     scenario we give the user a dummy entry so the wizard still renders. */
+  const safeOptions =
+    providerOptions.length > 0
+      ? providerOptions
+      : ['(leaflet-providers catalogue unavailable)'];
 
   return [
     {
@@ -253,20 +271,17 @@ function buildProviderFields() {
     {
       name: 'tile_provider_name',
       label: 'Provider key',
-      sublabel:
-        'Choose a provider key from the list.  “Provider.Variant” entries ' +
-        'use the named variant.',
       type: 'String',
-      required: true,
-      attributes: { options: providerOptions },
-      showIf: { tile_provider_enabled: true }, // Saltcorn ≥1.0
+      required: providerOptions.length > 0, // only require when list ready
+      attributes: { options: safeOptions },
+      showIf: { tile_provider_enabled: true },
     },
     {
       name: 'tile_provider_options',
       label: 'Provider options (JSON)',
       sublabel:
-        'Optional raw JSON for custom API keys, attribution overrides, etc.  ' +
-        'Example: {"apikey":"YOUR_KEY_HERE"}.',
+        'Optional raw JSON for API keys or attribution overrides.  Example: ' +
+        '{"apikey":"YOUR_KEY"}',
       type: 'String',
       attributes: { input_type: 'textarea', rows: 4 },
       showIf: { tile_provider_enabled: true },
@@ -275,83 +290,59 @@ function buildProviderFields() {
 }
 
 /**
- * Resolve the Table regardless of Saltcorn’s call signature.
+ * Resolve the Table irrespective of Saltcorn’s sig differences.
  *
  * @param {unknown[]} sig
  * @returns {Promise<import('@saltcorn/types').Table|undefined>}
  */
 async function resolveTable(sig) {
-  dbg.trace('resolveTable()', { sig });
-
   const [first, second] = sig;
 
-  /* 1 – Direct numeric id? */
-  const num = Number(
+  /* 1 – numeric ID directly? */
+  const asNum = Number(
     typeof first === 'number' || typeof first === 'string' ? first : second,
   );
-  if (Number.isFinite(num) && num > 0) {
-    const t = await TableCls.findOne({ id: num });
-    if (t) {
-      dbg.info('resolveTable() hit direct id', { id: num });
-      return t;
-    }
+  if (Number.isFinite(asNum) && asNum > 0) {
+    const t = await TableCls.findOne({ id: asNum });
+    if (t) return t;
   }
 
-  /* 2 – Request object variants */
+  /* 2 – Express req variants */
   const req =
     first && typeof first === 'object' && 'method' in first ? first : undefined;
   if (!req) return undefined;
 
-  /* Editing existing view */
-  if (req.view?.table_id) {
-    dbg.info('resolveTable() via req.view.table_id', { id: req.view.table_id });
-    return TableCls.findOne({ id: req.view.table_id });
-  }
+  if (req.view?.table_id) return TableCls.findOne({ id: req.view.table_id });
+  if (req.query?.table)   return TableCls.findOne({ name: req.query.table });
 
-  /* Wizard ?table=foo */
-  if (req.query?.table) {
-    dbg.info('resolveTable() via req.query.table', { name: req.query.table });
-    return TableCls.findOne({ name: req.query.table });
-  }
-
-  /* Last-ditch param sniff */
+  /* 3 – param sniff (view name → table) */
   const vn =
-    (req.params &&
-      (req.params.name || req.params.viewname || req.params[0])) ||
+    (req.params && (req.params.name || req.params.viewname || req.params[0])) ||
     undefined;
   if (vn) {
-    dbg.info('resolveTable() via param', { vn });
     const vw = await ViewCls.findOne({ name: vn });
     if (vw) return TableCls.findOne({ id: vw.table_id });
   }
-
-  dbg.warn('resolveTable() failed – no table found');
   return undefined;
 }
 
 /**
- * configuration_workflow – two-step wizard.
+ * Two-step configuration wizard.
  */
 function configurationWorkflow(...sig) {
-  dbg.info('configurationWorkflow()', { rawSignature: sig });
-
   return new Workflow({
     steps: [
       {
         name: 'Data & Pop-ups',
         form: async () => {
-          const tbl = await resolveTable(sig);
+          const tbl  = await resolveTable(sig);
           const flds = tbl ? await tbl.getFields() : [];
-          dbg.info('Config form fields (page 1)', { count: flds.length });
           return new Form({ fields: buildDataFields(flds) });
         },
       },
       {
         name: 'Tile Provider',
-        form: async () => {
-          dbg.info('Config form (page 2) – tile provider');
-          return new Form({ fields: buildProviderFields() });
-        },
+        form: async () => new Form({ fields: buildProviderFields() }),
       },
     ],
   });
@@ -362,29 +353,23 @@ function configurationWorkflow(...sig) {
 const compositeMapTemplate = {
   name: 'composite_map',
   description:
-    'Plots every geometry row from the query on a Leaflet map. Hover to ' +
-    'see pop-ups – click/tap navigates (if configured).',
+    'Plots the query result on a Leaflet map.  Hover shows pop-ups; ' +
+    'click/tap can navigate to another view.',
   display_state_form: false,
   get_state_fields: () => [],
   configuration_workflow: configurationWorkflow,
 
   /**
    * Runtime renderer.
-   *
-   * @param {number|string} tableRef
-   * @param {string} viewname
-   * @param {object} cfg
-   * @param {object} state
-   * @returns {Promise<string>}
    */
   async run(tableRef, viewname, cfg, state) {
-    dbg.info('composite_map.run()', { tableRef, cfg, state });
+    dbg.info('composite_map.run()', { cfg });
 
-    /* ───── Config unwrap (page 1) ───── */
+    /* ───── Unpack config (page 1) ───── */
     const geomCol       = cfg.geometry_field || 'geom';
-    const popupField    = cfg.popup_field || '';
+    const popupField    = cfg.popup_field    || '';
     const popupTemplate = cfg.popup_template || '';
-    const iconTemplate  = cfg.icon_template || '';
+    const iconTemplate  = cfg.icon_template  || '';
 
     const clickView = cfg.click_view || '';
     const height    = Number(cfg.height) || 300;
@@ -397,96 +382,83 @@ const compositeMapTemplate = {
     const groupField = cfg.group_field || '';
     const rowLimit   = Number(cfg.row_limit) || 0;
 
-    /* ───── Config unwrap (page 2) ───── */
+    /* ───── Unpack config (page 2) ───── */
     const providerEnabled = !!cfg.tile_provider_enabled;
     const providerName    = cfg.tile_provider_name || '';
     let   providerOpts    = {};
     if (providerEnabled && cfg.tile_provider_options) {
-      try {
-        providerOpts = JSON.parse(cfg.tile_provider_options);
-      } catch (e) {
-        dbg.warn('Invalid JSON in tile_provider_options – ignored.', e);
-      }
+      try { providerOpts = JSON.parse(cfg.tile_provider_options); }
+      catch { /* ignore invalid JSON */ }
     }
-    dbg.debug('Provider settings', { providerEnabled, providerName, providerOpts });
 
-    /* ───── Fetch table + rows ───── */
-    const where =
-      typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef };
-    const table = await TableCls.findOne(where);
-    if (!table) {
-      dbg.error('Table not found at run-time', { where });
-      return '<div class="alert alert-danger">Table not found.</div>';
-    }
+    /* ───── Fetch table & rows ───── */
+    const table = await TableCls.findOne(
+      typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef },
+    );
+    if (!table) return '<div class="alert alert-danger">Table not found.</div>';
 
     let rows = await table.getRows(state);
-    dbg.info('Rows fetched', { count: rows.length });
 
-    /* ───── Optional ordering ───── */
+    /* ordering / limiting */
     if (orderField) {
-      dbg.debug('Applying default order', { orderField, orderDesc });
-      rows = rows.sort((a, b) => {
-        if (a[orderField] === b[orderField]) return 0;
-        return a[orderField] > b[orderField] ? 1 : -1;
-      });
+      rows.sort((a, b) =>
+        a[orderField] === b[orderField]
+          ? 0
+          : a[orderField] > b[orderField]
+            ? 1
+            : -1,
+      );
       if (orderDesc) rows.reverse();
     }
+    if (rowLimit > 0) rows = rows.slice(0, rowLimit);
 
-    /* ───── Row-limit ───── */
-    if (rowLimit > 0 && rows.length > rowLimit) {
-      dbg.debug('Row limit applied', { rowLimit });
-      rows = rows.slice(0, rowLimit);
-    }
-
-    /* ───── Build FeatureCollection ───── */
+    /* Build GeoJSON FeatureCollection */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
       if (!gj) continue;
-
       features.push({
         type: 'Feature',
         properties: { __id: row.id, ...row },
         geometry: gj.type === 'Feature' ? gj.geometry : gj,
       });
     }
-    dbg.info('Features built', { count: features.length });
-
     const collection = { type: 'FeatureCollection', features };
+
     const mapId = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
-    /* ───── Pre-map HTML (create-row button) ───── */
-    const createBtnHTML = showCreate
-      ? `<div class="mb-2 text-end">
-           <a class="btn btn-sm btn-primary"
-              href="/view/${createView}?redirect=/view/${viewname}">
-             <i class="fas fa-plus"></i>&nbsp;Create&nbsp;new&nbsp;row
-           </a>
-         </div>`
-      : '';
+    /* ───── Optional create-row button ───── */
+    const createBtn =
+      showCreate
+        ? `<div class="mb-2 text-end">
+             <a class="btn btn-sm btn-primary"
+                href="/view/${createView}?redirect=/view/${viewname}">
+               <i class="fas fa-plus"></i>&nbsp;Create&nbsp;new&nbsp;row
+             </a>
+           </div>`
+        : '';
 
-    /* ───── HTML + JS payload ───── */
+    /* ───── Final HTML/JS payload ───── */
     return `
-${createBtnHTML}
+${createBtn}
 <div id="${mapId}" class="border rounded" style="height:${height}px;"></div>
+
 <script>
 (function(){
-  /* ─── Config & constants (embedded server-side) ─── */
   const DBG=${js(PLUGIN_DEBUG)};
   const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
-        hbJs=${js(HANDLEBARS_CDN)},
-        providerJs=${js(LEAFLET_PROVIDERS.js)},
-        geo=${js(collection)}, id=${js(mapId)},
-        lbl=${js(popupField)}, navView=${js(clickView)},
-        grp=${js(groupField)},
+        hbSrc=${js(HANDLEBARS_CDN)}, providersSrc=${js(LEAFLET_PROVIDERS.js)},
+        geo=${js(collection)}, mapId=${js(mapId)},
+        lbl=${js(popupField)}, grp=${js(groupField)},
         tplSrc=${js(popupTemplate)}, iconTplSrc=${js(iconTemplate)},
+        navView=${js(clickView)},
         provEnabled=${js(providerEnabled)}, provName=${js(providerName)},
         provOpts=${js(providerOpts)};
 
-  /* Loader helpers – ensure idempotent asset loading */
+  /* dynamic loaders (idempotent) */
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
-  function haveJs(s){return !!(document._loadedScripts&&document._loadedScripts[s]);}
+  function haveJs(s){ return !!(document._loadedScripts&&document._loadedScripts[s]);}
   function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
     const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;
     document.head.appendChild(l);});}
@@ -495,115 +467,99 @@ ${createBtnHTML}
       document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
     document.head.appendChild(sc);});}
 
-  /* Colour palette for group-by */
   const PALETTE=['red','blue','green','orange','purple','darkred','cadetblue',
                  'darkgreen','darkblue','darkpurple'];
   const grpColour={};
 
-  /* ─────────────────────────── Main async bootstrap ───────────────────────── */
-  (async()=>{await loadCss(css);await loadJs(jsSrc);
-    if(tplSrc||iconTplSrc) await loadJs(hbJs);
-    if(provEnabled) await loadJs(providerJs);
+  /* bootstrap */
+  (async()=>{
+    await loadCss(css); await loadJs(jsSrc);
+    if(tplSrc||iconTplSrc) await loadJs(hbSrc);
+    if(provEnabled) await loadJs(providersSrc);
 
-    const popupFn = (window.Handlebars&&tplSrc)?Handlebars.compile(tplSrc):null;
-    const iconFn  = (window.Handlebars&&iconTplSrc)?Handlebars.compile(iconTplSrc):null;
+    const popupFn = window.Handlebars&&tplSrc ? Handlebars.compile(tplSrc) : null;
+    const iconFn  = window.Handlebars&&iconTplSrc ? Handlebars.compile(iconTplSrc) : null;
 
-    /* Map initialisation */
-    const map=L.map(id).setView([${lat},${lng}],${zoom});
+    const map = L.map(mapId).setView([${lat},${lng}],${zoom});
 
-    /* Base layer */
-    let baseLayer;
-    if(provEnabled && window.L && L.tileLayer && L.tileLayer.provider && provName){
-      try{
-        baseLayer=L.tileLayer.provider(provName, provOpts).addTo(map);
-      }catch(e){
-        if(DBG)console.error('Provider load failed, falling back to OSM',e);
-      }
+    /* base layer */
+    let base;
+    if(provEnabled && L.tileLayer.provider && provName){
+      try{ base=L.tileLayer.provider(provName, provOpts).addTo(map); }
+      catch(e){ if(DBG)console.error('Provider failed, falling back.',e); }
     }
-    if(!baseLayer){
-      baseLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        { attribution:'&copy; OpenStreetMap contributors' }).addTo(map);
+    if(!base){
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+        attribution:'&copy; OpenStreetMap contributors'
+      }).addTo(map);
     }
 
-    /* ─── Marker factory ─── */
-    function buildMarker(f,latlng){
-      /* 1 – Icon template overrides everything */
-      if(iconFn){
+    /* marker factory */
+    function makeMarker(f,latlng){
+      if(iconFn){       /* template-driven icon */
         let html='';
-        try{html=iconFn(f.properties);}catch(e){if(DBG)console.warn(e);}
+        try{ html=iconFn(f.properties);}catch(e){if(DBG)console.warn(e);}
         if(!html) return L.marker(latlng);
 
-        /* Image URL vs inline HTML */
         if(/^(https?:)?\\/\\/.+\\.(png|jpe?g|gif|svg)$/i.test(html)){
-          const icon=L.icon({iconUrl:html,iconSize:[28,28],iconAnchor:[14,28]});
-          return L.marker(latlng,{icon});
+          return L.marker(latlng,{
+            icon:L.icon({iconUrl:html,iconSize:[28,28],iconAnchor:[14,28]})
+          });
         }
-        const divI=L.divIcon({className:'',html,iconSize:[28,28],iconAnchor:[14,28]});
-        return L.marker(latlng,{icon:divI});
+        return L.marker(latlng,{
+          icon:L.divIcon({className:'',html,iconSize:[28,28],iconAnchor:[14,28]})
+        });
       }
 
-      /* 2 – Group colouring */
-      if(grp&&f.properties){
-        const g=f.properties[grp];
+      if(grp){
+        const g=f.properties?.[grp];
         if(!(g in grpColour)){
           grpColour[g]=PALETTE[Object.keys(grpColour).length%PALETTE.length];
         }
         const col=grpColour[g];
-        const icon=L.divIcon({className:'',html:
-          '<i class="fas fa-map-marker-alt" style="color:'+col+';font-size:1.5rem;"></i>',
-          iconSize:[24,24],iconAnchor:[12,24]});
-        return L.marker(latlng,{icon});
+        return L.marker(latlng,{
+          icon:L.divIcon({className:'',html:
+            '<i class="fas fa-map-marker-alt" style="color:'+col+';font-size:1.5rem;"></i>',
+            iconSize:[24,24],iconAnchor:[12,24]})
+        });
       }
-
-      /* 3 – Default Leaflet blue */
       return L.marker(latlng);
     }
 
-    /* ─── GeoJSON layer ─── */
+    /* main layer */
     const layer=L.geoJSON(geo,{
-      pointToLayer:function(f,latlng){return buildMarker(f,latlng);},
-      style:function(f){
-        if(iconFn) return {};
-        if(!grp||!f.properties) return {};
-        const g=f.properties[grp];
+      pointToLayer:(f,latlng)=>makeMarker(f,latlng),
+      style:(f)=>{
+        if(iconFn||!grp) return {};
+        const g=f.properties?.[grp];
         if(!(g in grpColour)){
           grpColour[g]=PALETTE[Object.keys(grpColour).length%PALETTE.length];
         }
         return {color:grpColour[g]};
       },
-      onEachFeature:function(f,l){
-        /* ── Popup content ── */
-        let popContent='';
+      onEachFeature:(f,l)=>{
+        /* hover pop-up */
+        let pop='';
         if(popupFn){
-          try{popContent=popupFn(f.properties);}catch(e){if(DBG)console.warn(e);}
-        }else if(lbl&&f.properties&&f.properties[lbl]!==undefined){
-          popContent=String(f.properties[lbl]);
+          try{pop=popupFn(f.properties);}catch(e){if(DBG)console.warn(e);}
+        }else if(lbl && f.properties?.[lbl]!==undefined){
+          pop=String(f.properties[lbl]);
+        }
+        if(pop){
+          const show=e=>{
+            const ll=e?.latlng||(l.getBounds?.().getCenter?.());
+            if(!ll) return;
+            l.__p=L.popup({closeButton:false,autoClose:true})
+                   .setLatLng(ll).setContent(pop).openOn(map);
+          };
+          const hide=()=>{ if(l.__p){map.closePopup(l.__p);l.__p=null;} };
+          l.on('mouseover',show).on('mouseout',hide)
+           .on('touchstart',show).on('touchend touchcancel',hide);
         }
 
-        /* Hover/touch pop-ups */
-        if(popContent){
-          const show=function(e){
-            try{
-              const ll=e?.latlng|| (l.getBounds?l.getBounds().getCenter(): l.getLatLng?.());
-              if(!ll) return;
-              l.__pcHoverPopup=L.popup({closeButton:false,autoClose:true})
-                                 .setLatLng(ll).setContent(popContent).openOn(map);
-            }catch(err){if(DBG)console.error(err);}
-          };
-          const hide=function(){
-            try{
-              if(l.__pcHoverPopup){map.closePopup(l.__pcHoverPopup);l.__pcHoverPopup=null;}
-            }catch(err){if(DBG)console.error(err);}
-          };
-          l.on('mouseover',show);
-          l.on('mouseout',hide);
-          l.on('touchstart',show);
-          l.on('touchend touchcancel',hide);
-        }
-
-        /* Navigation click */
-        if(navView&&f.properties&&f.properties.__id){
-          l.on('click',()=>{window.location.href='/view/'+navView+'?id='+f.properties.__id;});
+        /* click navigation */
+        if(navView && f.properties?.__id){
+          l.on('click',()=>{location.href='/view/'+navView+'?id='+f.properties.__id;});
         }
       }
     }).addTo(map);
