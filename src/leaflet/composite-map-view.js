@@ -2,28 +2,33 @@
  * composite-map-view.js
  * -----------------------------------------------------------------------------
  * View-template “composite_map” – plots every geometry row returned by the
- * query on one interactive Leaflet map.  Version 4 introduces **optional**
- * Leaflet-providers support so administrators can select any community
- * basemap without dragging the extra JS into the browser unless needed.
+ * query on one interactive Leaflet map.  Version 4 adds **Leaflet-providers**
+ * integration with an administrator friendly drop-down list populated
+ * automatically from the bundled providers script.
  *
  * v4 – 2025-04-27
- *   • Full Leaflet-providers integration (conditional loading).
- *   • 2-page settings wizard: “Data & Pop-ups” and “Tile Provider”.
- *   • Extensive debug instrumentation gated by PLUGIN_DEBUG.
+ *   • Providers parsed server-side via `vm` – zero maintenance.
+ *   • 2-page wizard: ① Data & Pop-ups, ② Tile Provider (with drop-down).
+ *   • Only loads the heavy providers JS in the browser when actually used.
+ *   • Full debug instrumentation – gated by `PLUGIN_DEBUG`.
  *
- * Author:      Troy Kelly <troy@team.production.city>
- * Licence:     CC0-1.0
+ * Author:  Troy Kelly <troy@team.production.city>
+ * Licence: CC0-1.0
  */
 
 'use strict';
 
 /* eslint-disable max-lines-per-function */
 
+const fs   = require('fs');
+const path = require('path');
+const vm   = require('vm');
+
 const dbg = require('../utils/debug');
 
-const Table = require('@saltcorn/data/models/table');
+const Table    = require('@saltcorn/data/models/table');
 const Workflow = require('@saltcorn/data/models/workflow');
-const Form = require('@saltcorn/data/models/form');
+const Form     = require('@saltcorn/data/models/form');
 
 const { wktToGeoJSON } = require('../utils/geometry');
 const {
@@ -39,12 +44,10 @@ const HANDLEBARS_CDN =
 
 /* ─────────────────── Saltcorn 0.x / 1.x compatibility ────────────────── */
 
-const TableCls = Table?.findOne ? Table
-  : Table?.Table ? Table.Table : Table;
+const TableCls = Table?.findOne ? Table : Table?.Table ? Table.Table : Table;
 
 const ViewMod = require('@saltcorn/data/models/view');
-const ViewCls = ViewMod?.findOne ? ViewMod
-  : ViewMod?.View ? ViewMod.View : ViewMod;
+const ViewCls = ViewMod?.findOne ? ViewMod : ViewMod?.View ? ViewMod.View : ViewMod;
 
 /* ───────────────────────────── helpers ──────────────────────────────── */
 
@@ -56,6 +59,72 @@ const ViewCls = ViewMod?.findOne ? ViewMod
  */
 function js(v) {
   return JSON.stringify(v ?? null).replace(/</g, '\\u003c');
+}
+
+/**
+ * Lazy loader that parses `leaflet-providers.js` once and returns an alphabetic
+ * array of provider keys accepted by `L.tileLayer.provider()`.
+ *
+ * The parsing happens in a sandboxed `vm` context with a stub Leaflet object
+ * so the upstream add-on registers its provider catalogue without polluting
+ * the real environment.  The result is cached for the lifetime of the process.
+ *
+ * @returns {string[]}
+ */
+function getProviderOptions() {
+  if (getProviderOptions._cache) return getProviderOptions._cache;
+
+  try {
+    const filePath = path.resolve(
+      __dirname,
+      '../../public/leaflet-providers/leaflet-providers.js',
+    );
+    const code = fs.readFileSync(filePath, 'utf8');
+
+    /* Minimal Leaflet stub – just enough for the add-on to attach providers. */
+    const stubL = {
+      Util: { extend: (...objs) => Object.assign({}, ...objs) },
+      TileLayer: {
+        extend: () => function () {}, // noop constructor
+        Provider: {},
+      },
+    };
+
+    /* The upstream IIFE uses `this` as the root argument. */
+    const sandbox = {
+      L: stubL,
+      console,                 // allow debugging inside the sandbox
+      define: undefined,       // pretend AMD absent
+      modules: undefined,
+      module: {},              // CommonJS test will fail (uses `modules`)
+      exports: {},
+      require: () => ({}),     // “leaflet” shim
+    };
+    vm.createContext(sandbox);
+
+    /* Execute the add-on – this will populate `L.TileLayer.Provider.providers`. */
+    vm.runInContext(code, sandbox, { filename: 'leaflet-providers.js' });
+
+    const providersObj = sandbox.L.TileLayer.Provider.providers || {};
+    /** @type {string[]} */
+    const out = [];
+
+    for (const [pName, pObj] of Object.entries(providersObj)) {
+      out.push(pName);
+      if (pObj && pObj.variants) {
+        for (const v of Object.keys(pObj.variants)) out.push(`${pName}.${v}`);
+      }
+    }
+    out.sort((a, b) => a.localeCompare(b));
+
+    dbg.info('Leaflet provider list parsed', { count: out.length });
+    getProviderOptions._cache = out;
+    return out;
+  } catch (err) {
+    dbg.error('Failed to parse leaflet-providers list – falling back.', err);
+    getProviderOptions._cache = [];
+    return [];
+  }
 }
 
 /**
@@ -165,14 +234,14 @@ function buildDataFields(fields) {
 }
 
 /**
- * Second wizard page – tile provider settings.
- *
- * Administrators may leave everything off to stay with stock OSM.  Toggling
- * the provider loads the additional JS only on the client views that need it.
+ * Second wizard page – tile provider settings (drop-down).
  *
  * @returns {import('@saltcorn/types').TypeAttribute[]}
  */
 function buildProviderFields() {
+  const providerOptions = getProviderOptions();
+  dbg.debug('buildProviderFields()', { providerOptionsSample: providerOptions.slice(0, 5) });
+
   return [
     {
       name: 'tile_provider_enabled',
@@ -184,16 +253,20 @@ function buildProviderFields() {
     {
       name: 'tile_provider_name',
       label: 'Provider key',
-      sublabel: 'e.g. "Stadia.AlidadeSmooth", "CartoDB.DarkMatter".',
+      sublabel:
+        'Choose a provider key from the list.  “Provider.Variant” entries ' +
+        'use the named variant.',
       type: 'String',
-      showIf: { tile_provider_enabled: true }, // Saltcorn >=1.0
+      required: true,
+      attributes: { options: providerOptions },
+      showIf: { tile_provider_enabled: true }, // Saltcorn ≥1.0
     },
     {
       name: 'tile_provider_options',
       label: 'Provider options (JSON)',
       sublabel:
-        'Optional raw JSON for custom API keys, attribution, etc.  Leave ' +
-        'blank to use the provider defaults.  Example: {"apikey":"XYZ"}.',
+        'Optional raw JSON for custom API keys, attribution overrides, etc.  ' +
+        'Example: {"apikey":"YOUR_KEY_HERE"}.',
       type: 'String',
       attributes: { input_type: 'textarea', rows: 4 },
       showIf: { tile_provider_enabled: true },
@@ -243,7 +316,8 @@ async function resolveTable(sig) {
 
   /* Last-ditch param sniff */
   const vn =
-    (req.params && (req.params.name || req.params.viewname || req.params[0])) ||
+    (req.params &&
+      (req.params.name || req.params.viewname || req.params[0])) ||
     undefined;
   if (vn) {
     dbg.info('resolveTable() via param', { vn });
@@ -256,7 +330,7 @@ async function resolveTable(sig) {
 }
 
 /**
- * configuration_workflow – two-page wizard.
+ * configuration_workflow – two-step wizard.
  */
 function configurationWorkflow(...sig) {
   dbg.info('configurationWorkflow()', { rawSignature: sig });
@@ -448,12 +522,12 @@ ${createBtnHTML}
     }
     if(!baseLayer){
       baseLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        { attribution:'&copy; OpenStreetMap' }).addTo(map);
+        { attribution:'&copy; OpenStreetMap contributors' }).addTo(map);
     }
 
     /* ─── Marker factory ─── */
     function buildMarker(f,latlng){
-      /* 1. Icon template overrides everything */
+      /* 1 – Icon template overrides everything */
       if(iconFn){
         let html='';
         try{html=iconFn(f.properties);}catch(e){if(DBG)console.warn(e);}
@@ -468,7 +542,7 @@ ${createBtnHTML}
         return L.marker(latlng,{icon:divI});
       }
 
-      /* 2. Group colouring */
+      /* 2 – Group colouring */
       if(grp&&f.properties){
         const g=f.properties[grp];
         if(!(g in grpColour)){
@@ -481,7 +555,7 @@ ${createBtnHTML}
         return L.marker(latlng,{icon});
       }
 
-      /* 3. Default Leaflet blue */
+      /* 3 – Default Leaflet blue */
       return L.marker(latlng);
     }
 
@@ -498,7 +572,7 @@ ${createBtnHTML}
         return {color:grpColour[g]};
       },
       onEachFeature:function(f,l){
-        /* ----- Popup content resolution ----- */
+        /* ── Popup content ── */
         let popContent='';
         if(popupFn){
           try{popContent=popupFn(f.properties);}catch(e){if(DBG)console.warn(e);}
@@ -506,7 +580,7 @@ ${createBtnHTML}
           popContent=String(f.properties[lbl]);
         }
 
-        /* ----- Hover/touch-hover pop-up behaviour ----- */
+        /* Hover/touch pop-ups */
         if(popContent){
           const show=function(e){
             try{
@@ -527,7 +601,7 @@ ${createBtnHTML}
           l.on('touchend touchcancel',hide);
         }
 
-        /* ----- Click navigation (kept distinct) ----- */
+        /* Navigation click */
         if(navView&&f.properties&&f.properties.__id){
           l.on('click',()=>{window.location.href='/view/'+navView+'?id='+f.properties.__id;});
         }
