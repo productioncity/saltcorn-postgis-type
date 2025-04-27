@@ -69,8 +69,8 @@ const DEFAULT_CENTER = Object.freeze({
 
 /** @type {LeafletStatic} */
 const LEAFLET = Object.freeze({
-  css: `/plugins/public/${PLUGIN_SLUG}/leaflet.css`,
-  js: `/plugins/public/${PLUGIN_SLUG}/leaflet.js`,
+  css: `/plugins/public/${PLUGIN_SLUG}/leaflet/leaflet.css`,
+  js: `/plugins/public/${PLUGIN_SLUG}/leaflet/leaflet.js`,
   /**
    * Returns HTML that loads Leaflet only if `window.L` is not already defined.
    *
