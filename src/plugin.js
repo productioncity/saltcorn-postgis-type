@@ -3,22 +3,23 @@
  * ---------------------------------------------------------------------------
  * Root export – wires PostGIS types into Saltcorn and patches Table.getRows.
  *
- * Author:  Troy Kelly  <troy@team.production.city>
- * Licence: CC0‑1.0
+ * Author:  Troy Kelly  <troy@team.production.city>
+ * Licence: CC0-1.0
  */
 
 'use strict';
 
 /* eslint-disable camelcase */
 
-const dbg = require('./utils/debug');
-const { types } = require('./types/catalogue');
-const { patchGetRows } = require('./table/patch-get-rows');
-const { wktToLonLat } = require('./utils/geometry');
-const { LEAFLET } = require('./constants');
+const dbg                       = require('./utils/debug');
+const { types }                 = require('./types/catalogue');
+const { patchGetRows }          = require('./table/patch-get-rows');
+const { wktToLonLat }           = require('./utils/geometry');
+const { LEAFLET }               = require('./constants');
+const { compositeMapTemplate }  = require('./leaflet/composite-map-view');
 
 const TableMod = require('@saltcorn/data/models/table');
-const Field = require('@saltcorn/data/models/field');
+const Field    = require('@saltcorn/data/models/field');
 
 /* Resolve Table class across Saltcorn 0.x / 1.x variants */
 const Table =
@@ -82,49 +83,53 @@ const createLatLngColumnsAction = {
   },
 };
 
-/* ─────────────────────── Plug‑in Export ───────────────────── */
+/* ─────────────────────── Plug-in Export ───────────────────── */
 
 module.exports = {
   sc_plugin_api_version: 1,
   plugin_name: 'saltcorn-postgis-type',
 
-  /* Inject local Leaflet assets so they are always web‑served */
+  /* Make Leaflet assets available */
   headers: [
     { css: LEAFLET.css },
     { script: LEAFLET.js },
   ],
 
   /**
-   * Runs once at start‑up (or when the plug‑in is enabled).
-   * Patches Table.getRows so Point columns produce virtual
-   * <col>_lat and <col>_lng properties.
+   * Runs once at start-up (or when the plug-in is enabled).
    *
    * @returns {void}
    */
   onLoad() {
-    dbg.debug('Plug‑in onLoad()', { timestamp: new Date().toISOString() });
+    dbg.debug('Plug-in onLoad()', { timestamp: new Date().toISOString() });
     let T = require('@saltcorn/data/models/table');
     if (T && T.Table) T = T.Table;
     if (T && T.prototype) {
       patchGetRows(T);
       dbg.info('Table.getRows successfully patched.');
     } else {
-      /* eslint-disable-next-line no-console */
+      // eslint-disable-next-line no-console
       console.error(
         'saltcorn-postgis-type: Unable to patch Table.getRows – Table class not found',
       );
     }
   },
 
+  /* PostGIS scalar types */
   types,
 
+  /* New composite map view-template */
+  viewtemplates: [compositeMapTemplate],
+
+  /* Extra actions */
   actions: {
     create_point_latlng_columns: createLatLngColumnsAction,
   },
 
+  /* Helper functions surfaced to Saltcorn */
   functions: {
     /**
-     * Convert POINT WKT→ {lat,lng,latlng}.
+     * Convert POINT WKT → plain lat/lng numbers.
      * @param {string} wkt
      * @returns {{lat:number,lng:number,latlng:[number,number]}|undefined}
      */
@@ -135,6 +140,6 @@ module.exports = {
     },
   },
 
-  /* Run‑time dependencies (for Saltcorn store UI) */
+  /* Run-time dependency info for Saltcorn “Store” UI */
   dependencies: ['wellknown', 'wkx'],
 };

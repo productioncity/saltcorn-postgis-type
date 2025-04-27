@@ -1,36 +1,28 @@
 /**
  * geometry.js
  * ---------------------------------------------------------------------------
- * Stateless helpers for converting between WKT, EWKT, **hex‑encoded WKB** and
- * GeoJSON, as well as validating PostGIS‑related attribute objects.
+ * Stateless helpers for converting between WKT, EWKT, **hex-encoded WKB** and
+ * GeoJSON, as well as validating PostGIS-related attribute objects.
  *
- * Handles every practical edge‑case:
- *   • Optional `SRID=…;` prefix (EWKT).                     – in/out
- *   • Optional `Z`, `M`, `ZM` dimensionality suffix.       – in/out
- *   • Hex‑WKB returned by a plain `geometry::text` cast.    – in
- *   • Node‐Postgres binary column output (`Buffer`).        – in
+ * Now also understands the PostGIS helper form `ST_AsEWKT(<hex-wkb>)`.
  *
- * Author:       Troy Kelly <troy@team.production.city>
- * First‑created: 2024‑04‑17
- * This revision: 2025‑04‑20 –  Hex‑WKB aware extractFirstZ() so the edit view
- *                              correctly pre‑loads altitude values.
- * Licence:      CC0‑1.0  (see LICENCE)
+ * Author:  Troy Kelly  <troy@team.production.city>
+ * Licence: CC0-1.0
  */
 
 'use strict';
 
 /* eslint-disable no-magic-numbers */
 
-const dbg = require('./debug');
+const dbg       = require('./debug');
 const wellknown = require('wellknown');
-let   wkx;                   // Lazy‑required – optional dependency.
 
+let wkx;
 try {
-  // `wkx` is a tiny (25 kB) pure‑JS library, MIT‑licensed.
+  // Pure-JS parser (MIT) – present unless the host deliberately prunes deps.
   // eslint-disable-next-line global-require
   wkx = require('wkx');
 } catch {
-  /* istanbul ignore next */
   wkx = null;
 }
 
@@ -44,9 +36,7 @@ const { DIM_MODS, BASE_GEOM_TYPES } = require('../constants');
 /* ───────────────────────── Internal helpers ───────────────────────── */
 
 /**
- * Safely converts **anything** we might receive from Postgres into a string
- * for further processing. Buffers become their hex representation, everything
- * else is coerced with `${}` semantics.
+ * Coerce **anything** we might receive from Postgres into a string.
  *
  * @param {unknown} v
  * @returns {string|undefined}
@@ -59,7 +49,7 @@ function coerceToString(v) {
 }
 
 /**
- * Returns true if the supplied string is very likely hexadecimal.
+ * Naïve hex detector.
  *
  * @param {string} txt
  * @returns {boolean}
@@ -71,8 +61,7 @@ function isLikelyHex(txt) {
 }
 
 /**
- * Strip a trailing `::text` (or any other `::type`) cast that PostgreSQL
- * appends when a plain `geom::text` expression is used.
+ * Strip a trailing `::text` (or any `::type`) cast.
  *
  * @param {string} src
  * @returns {string}
@@ -84,12 +73,11 @@ function stripPgCast(src) {
 }
 
 /**
- * Converts hex‑encoded WKB ➜ EWKT (string) *or* GeoJSON (object) depending on
- * `as`.
+ * Hex-WKB ➜ EWKT or GeoJSON.
  *
  * @template {'wkt'|'geojson'} T
  * @param {string} hex
- * @param {T}      as
+ * @param {T} as
  * @returns {T extends 'wkt' ? string|undefined
  *          : T extends 'geojson' ? Record<string, unknown>|undefined
  *          : never}
@@ -97,6 +85,7 @@ function stripPgCast(src) {
 function decodeHexWkb(hex, as) {
   dbg.trace('decodeHexWkb()', { as, sample: hex.slice(0, 18) });
   if (!wkx || !isLikelyHex(hex)) return /** @type {never} */ (undefined);
+
   try {
     const geom = wkx.Geometry.parse(Buffer.from(hex, 'hex'));
 
@@ -106,9 +95,8 @@ function decodeHexWkb(hex, as) {
       return g;
     }
 
-    // as === 'wkt'
     const srid = geom.srid && geom.srid !== 0 ? `SRID=${geom.srid};` : '';
-    const wkt = /** @type {never} */ (`${srid}${geom.toWkt()}`);
+    const wkt  = /** @type {never} */ (`${srid}${geom.toWkt()}`);
     dbg.debug('decodeHexWkb() ➜ WKT', wkt.slice(0, 64));
     return wkt;
   } catch (e) {
@@ -118,23 +106,19 @@ function decodeHexWkb(hex, as) {
 }
 
 /**
- * Recursively strips Z/M / extra‑ordinate values from a GeoJSON coordinates
- * array, returning a *new* structure so the original is never mutated.
+ * Recursively drop Z/M from coords.
  *
  * @param {unknown} coords
  * @returns {unknown}
  */
 function stripZCoords(coords) {
   if (!Array.isArray(coords)) return coords;
-  if (typeof coords[0] === 'number') {
-    // Leaf node – keep just the first 2 numbers (x/y or lng/lat).
-    return coords.slice(0, 2);
-  }
+  if (typeof coords[0] === 'number') return coords.slice(0, 2);
   return coords.map(stripZCoords);
 }
 
 /**
- * Deep‑copies and purges Z/M dimensions across *all* geometries.
+ * Deep clone ➜ strip Z.
  *
  * @template {Record<string, unknown>} T
  * @param {T} geojson
@@ -149,7 +133,7 @@ function stripZFromGeoJSON(geojson) {
     if (g.type === 'GeometryCollection' && Array.isArray(g.geometries)) {
       g.geometries.forEach(recurse);
     } else if ('coordinates' in g) {
-      // @ts-ignore
+      // @ts-ignore – runtime path
       g.coordinates = stripZCoords(g.coordinates);
     }
   }
@@ -159,21 +143,16 @@ function stripZFromGeoJSON(geojson) {
 }
 
 /**
- * Normalise any geometry‑only GeoJSON into something Leaflet understands
- * 100 % of the time:  we always return either a Feature or FeatureCollection,
- * never a bare geometry or GeometryCollection.
+ * Always return Feature / FeatureCollection.
  *
- * @template {Record<string, unknown>} T
- * @param {T|undefined} geom
+ * @param {Record<string, unknown>|undefined} geom
  * @returns {Record<string, unknown>|undefined}
  */
 function normaliseGeoJSON(geom) {
   if (!geom) return undefined;
 
-  /* Feature / FeatureCollection – already fine. */
   if (geom.type === 'Feature' || geom.type === 'FeatureCollection') return geom;
 
-  /* GeometryCollection ➜ FeatureCollection */
   if (geom.type === 'GeometryCollection' && Array.isArray(geom.geometries)) {
     return {
       type: 'FeatureCollection',
@@ -185,14 +164,13 @@ function normaliseGeoJSON(geom) {
     };
   }
 
-  /* Simple geometry ➜ Feature */
   return { type: 'Feature', properties: {}, geometry: geom };
 }
 
 /* ───────────────────────── Public helpers ─────────────────────────── */
 
 /**
- * Normalises ANY PostgreSQL geometry output into canonical EWKT.
+ * Normalise ANY Postgres geometry output into canonical EWKT.
  *
  * @param {unknown} value
  * @returns {string|undefined}
@@ -204,17 +182,25 @@ function toWkt(value) {
 
   const txt = stripPgCast(coerced.trim());
 
-  // 1. Already looks like EWKT/WKT – fast exit.
+  /* PostGIS helper wrapper */
+  const helper = txt.match(/^ST_AsEWKT\(([^)]+)\)$/i);
+  if (helper) {
+    const out = decodeHexWkb(helper[1], 'wkt');
+    dbg.trace('toWkt() ­– via ST_AsEWKT helper', out?.slice?.(0, 64));
+    return out;
+  }
+
+  /* Already WKT/EWKT */
   if (/^(SRID=\d+;)?[A-Z]+/u.test(txt)) return txt;
 
-  // 2. Hex‑encoded WKB?
+  /* Hex-WKB */
   const wkt = decodeHexWkb(txt, 'wkt');
   dbg.trace('toWkt() result', wkt?.slice?.(0, 64));
   return wkt;
 }
 
 /**
- * Extract `[lng, lat]` from a POINT (any input format). Ignores Z/M.
+ * Extract `[lng, lat]` from a POINT.
  *
  * @param {unknown} value
  * @returns {[number, number]|undefined}
@@ -235,7 +221,7 @@ function wktToLonLat(value) {
 }
 
 /**
- * Convert WKT / EWKT / hex‑WKB / Buffer to *2‑D* GeoJSON.
+ * Convert ANY representation ➜ 2-D GeoJSON.
  *
  * @param {unknown} value
  * @returns {Record<string, unknown>|undefined}
@@ -247,34 +233,38 @@ function wktToGeoJSON(value) {
 
   const raw = stripPgCast(coerced.trim());
 
-  /* 1. Hex‑WKB? (fast‑path) */
+  /* ST_AsEWKT wrapper */
+  const helper = raw.match(/^ST_AsEWKT\(([^)]+)\)$/i);
+  if (helper) {
+    const gj = decodeHexWkb(helper[1], 'geojson');
+    return normaliseGeoJSON(stripZFromGeoJSON(gj));
+  }
+
+  /* Hex-WKB */
   const hexDecoded = decodeHexWkb(raw, 'geojson');
   if (hexDecoded) return normaliseGeoJSON(stripZFromGeoJSON(hexDecoded));
 
-  /* 2. Drop `SRID=…;` so libraries don’t choke on it. */
+  /* Plain WKT/EWKT */
   const txt = raw.replace(/^SRID=\d+;/iu, '');
 
-  /* 3. Prefer `wkx` if available – it happily parses 3‑D + collections. */
   if (wkx) {
     try {
-      const geom = wkx.Geometry.parse(txt);
-      const gj   = /** @type {Record<string, unknown>} */ (geom.toGeoJSON());
+      const gj = /** @type {Record<string, unknown>} */ (
+        wkx.Geometry.parse(txt).toGeoJSON()
+      );
       dbg.debug('wktToGeoJSON() via wkx');
       return normaliseGeoJSON(stripZFromGeoJSON(gj));
     } catch (e) {
       dbg.warn('wkx parse failed – falling back to wellknown', e);
-      // Fall‑through.
     }
   }
 
-  /* 4. Legacy fallback – `wellknown` (2‑D only). */
   try {
     return normaliseGeoJSON(wellknown.parse(txt));
   } catch {
-    // Retry after stripping any explicit Z/M suffix.
-    const normalised = txt.replace(/\b([A-Z]+)(?:ZM|Z|M)\b/iu, '$1');
+    const resc = txt.replace(/\b([A-Z]+)(?:ZM|Z|M)\b/iu, '$1');
     try {
-      return normaliseGeoJSON(wellknown.parse(normalised));
+      return normaliseGeoJSON(wellknown.parse(resc));
     } catch (err) {
       dbg.warn('wktToGeoJSON() final attempt failed', err);
       return undefined;
@@ -283,32 +273,27 @@ function wktToGeoJSON(value) {
 }
 
 /**
- * Extract the first Z ordinate encountered inside **any** geometry string
- * or hex‑encoded WKB. Falls back to 0 if none present.
+ * Extract first Z ordinate (falls back to 0).
  *
  * @param {string} src
  * @returns {number}
  */
 function extractFirstZ(src) {
-  /* 1.  Ensure we are working with readable WKT/EWKT. */
+  dbg.trace('extractFirstZ()', { src: src?.slice?.(0, 64) });
   const wkt = toWkt(src) || (typeof src === 'string' ? src : '');
-
-  /* 2.  Strip EWKT SRID so it never interferes with the regex. */
   const txt = wkt.replace(/^SRID=\d+;/iu, '');
 
-  /* 3.  Regex hunts for “x y z” – captures the z. */
   const m = txt.match(
     /[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\s+([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/,
   );
 
   const z = m ? Number(m[1]) : 0;
-  dbg.trace('extractFirstZ()', { src: src?.slice?.(0, 64), z });
+  dbg.trace('extractFirstZ() result', z);
   return z;
 }
 
 /**
- * Attribute validator – called by Saltcorn when the admin saves the field
- * definition. Keeps backward compatibility with the original plug‑in.
+ * Validate attribute objects at design-time.
  *
  * @param {PostGISTypeAttrs=} attrs
  * @returns {true|string}

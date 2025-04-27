@@ -1,14 +1,13 @@
 {
   "name": "@productioncity/saltcorn-postgis-type",
   "version": "0.2.0",
-  "description": "Postgis type for Saltcorn",
+  "description": "PostGIS types for Saltcorn",
   "main": "index.js",
-  "dependencies": {
-    "@saltcorn/data": "^1.1.3",
-    "@saltcorn/markup": "^1.1.3",
-    "wellknown": "^0.5.0",
-    "wkx": "^0.5.0"
-  },
+  "files": [
+    "index.js",
+    "src",
+    "public"
+  ],
   "author": "Troy Kelly",
   "license": "CC0-1.0",
   "repository": "github:productioncity/saltcorn-postgis-type",
@@ -16,6 +15,12 @@
     "access": "public"
   },
   "packageManager": "yarn@4.9.1",
+  "dependencies": {
+    "@saltcorn/data": "^1.1.3",
+    "@saltcorn/markup": "^1.1.3",
+    "wellknown": "^0.5.0",
+    "wkx": "^0.5.0"
+  },
   "devDependencies": {
     "@saltcorn/types": "^1.1.4-beta.9"
   }

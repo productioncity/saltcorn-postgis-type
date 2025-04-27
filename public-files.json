@@ -1,0 +1,107 @@
+{
+    "leaflet": {
+        "releasefile": "https://github.com/Leaflet/Leaflet/releases/download/v1.9.4/leaflet.zip"
+    },
+    "plugins": [
+        {
+            "name": "leaflet-providers",
+            "description": "An extension to Leaflet that contains configurations for various free1 tile providers.",
+            "github": "https://github.com/leaflet-extras/leaflet-providers",
+            "files": [
+                "https://raw.githubusercontent.com/leaflet-extras/leaflet-providers/refs/heads/master/leaflet-providers.js"
+            ]
+        },
+        {
+            "name": "leaflet-multi-markers",
+            "description": "A Leaflet plugin for displaying a large number of highly customizable markers, such as those from a CSV file read using Papa Parse. It can easily handle both overall and individual settings for icons, markers, and popups.",
+            "github": "https://github.com/mfhsieh/leaflet-multi-markers",
+            "files": [
+                "https://raw.githubusercontent.com/mfhsieh/leaflet-multi-markers/refs/heads/main/dist/leaflet-multi-markers.min.js",
+                "https://raw.githubusercontent.com/mfhsieh/leaflet-multi-markers/refs/heads/main/dist/leaflet-iconex.min.js",
+                "https://raw.githubusercontent.com/mfhsieh/leaflet-multi-markers/refs/heads/main/dist/leaflet-iconex.css"
+            ]
+        },
+        {
+            "name": "wicket",
+            "description": "Wicket is a lightweight library for translating between Well-Known Text (WKT) and various client-side mapping frameworks",
+            "github": "https://github.com/arthur-e/Wicket/",
+            "files": [
+                "https://raw.githubusercontent.com/arthur-e/Wicket/refs/heads/master/wicket-leaflet.js"
+            ]
+        },
+        {
+            "name": "leaflet-indoor",
+            "description": "Provides basic tools to create indoor maps with Leaflet.",
+            "github": "https://github.com/cbaines/leaflet-indoor",
+            "files": [
+                "https://raw.githubusercontent.com/cbaines/leaflet-indoor/refs/heads/master/leaflet-indoor.js"
+            ]
+        },
+        {
+            "name": "leaflet-realtime",
+            "description": "Put realtime data on a Leaflet map: live tracking GPS units, sensor data or just about anything.",
+            "github": "https://github.com/perliedman/leaflet-realtime",
+            "files": [
+                "https://raw.githubusercontent.com/perliedman/leaflet-realtime/refs/heads/master/dist/leaflet-realtime.min.js"
+            ]
+        },
+        {
+            "name": "leaflet-timezones",
+            "description": "Overlay timezones on a Leaflet Earth map.",
+            "github": "https://github.com/dj0001/Leaflet.timezones",
+            "files": [
+                "https://raw.githubusercontent.com/dj0001/Leaflet.timezones/refs/heads/master/L.timezones.js"
+            ]
+        },
+        {
+            "name": "leaflet-environmental-layers",
+            "description": "A leaflet plugin that has a collection of layers containing environmental data pulled in from different sources.",
+            "github": "https://github.com/publiclab/leaflet-environmental-layers",
+            "files": [
+                "https://raw.githubusercontent.com/publiclab/leaflet-environmental-layers/refs/heads/main/dist/LeafletEnvironmentalLayers.js",
+                "https://raw.githubusercontent.com/publiclab/leaflet-environmental-layers/refs/heads/main/dist/LeafletEnvironmentalLayers.css"
+            ]
+        },
+        {
+            "name": "leaflet-markercluster",
+            "description": "Provides Beautiful Animated Marker Clustering functionality for Leaflet, a JS library for interactive maps.",
+            "github": "https://github.com/Leaflet/Leaflet.markercluster",
+            "releasefile": "https://github.com/Leaflet/Leaflet.markercluster/archive/v1.4.1.zip"
+        },
+        {
+            "name": "leaflet-editable-polyline",
+            "description": "Most editable polylines have performance problems on bigger polylines because of too many markers shown on the map.",
+            "github": "https://github.com/tkrajina/leaflet-editable-polyline",
+            "files": [
+                "https://raw.githubusercontent.com/tkrajina/leaflet-editable-polyline/refs/heads/master/src/leaflet-editable-polyline.js"
+            ]
+        },
+        {
+            "name": "leaflet-panel-layers",
+            "description": "Leaflet Control Layers extended with support groups and icons",
+            "github": "https://github.com/stefanocudini/leaflet-panel-layers",
+            "releasefile": "https://github.com/stefanocudini/leaflet-panel-layers/archive/refs/tags/v1.3.1.tar.gz"
+        },
+        {
+            "name": "leaflet-polylinemeasure",
+            "description": "Leaflet Plugin to measure distances of simple lines as well as of complex polylines.",
+            "github": "https://github.com/ppete2/Leaflet.PolylineMeasure",
+            "files": [
+                "https://raw.githubusercontent.com/ppete2/Leaflet.PolylineMeasure/refs/heads/master/Leaflet.PolylineMeasure.js",
+                "https://raw.githubusercontent.com/ppete2/Leaflet.PolylineMeasure/refs/heads/master/Leaflet.PolylineMeasure.css"
+            ]
+        },
+        {
+            "name": "leaflet-gesturehandling",
+            "description": "Brings the basic functionality of Google Maps Gesture Handling into Leaflet.",
+            "github": "https://github.com/elmarquis/Leaflet.GestureHandling/",
+            "releasefile": "https://github.com/elmarquis/Leaflet.GestureHandling/archive/refs/tags/v1.2.2.tar.gz"
+        },
+        {
+            "name": "leaflet-locatecontrol",
+            "description": "A useful control to geolocate the user with many options. Official Leaflet and MapBox plugin.",
+            "github": "https://github.com/domoritz/leaflet-locatecontrol",
+            "releasefile": "https://github.com/domoritz/leaflet-locatecontrol/archive/refs/tags/v0.84.2.tar.gz"
+        }
+    ]
+}

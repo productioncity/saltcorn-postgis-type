@@ -117,7 +117,13 @@ jobs:
         run: yarn install --immutable
 
       # -----------------------------------------------------------------------
-      # 8. Publish to GitHub Packages (private scope registry)
+      # 8. Download public assets
+      # -----------------------------------------------------------------------
+      - name: Populate public assets
+        run: node scripts/populate-public.js
+
+      # -----------------------------------------------------------------------
+      # 9. Publish to GitHub Packages (private scope registry)
       # -----------------------------------------------------------------------
       - name: Publish package (GitHub Packages)
         env:
@@ -133,7 +139,7 @@ jobs:
           yarn npm publish --access public
 
       # -----------------------------------------------------------------------
-      # 9. Publish to npmjs (which just sucks)
+      # 10. Publish to npmjs (which just sucks)
       # -----------------------------------------------------------------------
       - name: Publish to npmjs
         env:
