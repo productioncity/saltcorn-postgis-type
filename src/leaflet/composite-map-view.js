@@ -4,15 +4,17 @@
  * View-template “composite_map” – plots every geometry row returned by the
  * query on one interactive Leaflet map.
  *
- * v2 – 2025-04-26
- *   • Popup now supports Handlebars templates (`{{field}}`, `{{#if …}}`, etc.).
- *   • Point markers can be customised with an **icon template** (HTML, FA
- *     classes or direct image URL) – also Handlebars-aware.
- *   • Configuration form tool-tips extended explaining template usage.
+ * v3 – 2025-04-26
+ *   • Hover/touch-hover pop-ups: the configured popup (via simple column or
+ *     Handlebars template) now appears when the user hovers a feature with a
+ *     mouse or taps-and-holds on touch devices.
+ *   • Click/navigation separation: single-click (or the touch equivalent)
+ *     triggers the optional *click view* navigation **without** opening the
+ *     pop-up, resolving the long-standing conflict.
  *
  * All debug output remains controllable via PLUGIN_DEBUG in src/constants.js.
  *
- * Author:      Troy Kelly  <troy@team.production.city>
+ * Author:      Troy Kelly <troy@team.production.city>
  * Licence:     CC0-1.0
  */
 
@@ -26,8 +28,12 @@ const Table    = require('@saltcorn/data/models/table');
 const Workflow = require('@saltcorn/data/models/workflow');
 const Form     = require('@saltcorn/data/models/form');
 
-const { wktToGeoJSON }           = require('../utils/geometry');
-const { LEAFLET, DEFAULT_CENTER } = require('../constants');
+const { wktToGeoJSON }              = require('../utils/geometry');
+const {
+  LEAFLET,
+  DEFAULT_CENTER,
+  PLUGIN_DEBUG,
+}                                    = require('../constants');
 
 /* Optional: runtime Handlebars (lazy-loaded via CDN in browser) */
 const HANDLEBARS_CDN =
@@ -240,8 +246,8 @@ function configurationWorkflow(...sig) {
 const compositeMapTemplate = {
   name: 'composite_map',
   description:
-    'Plots every geometry row from the query on a Leaflet map. Now with ' +
-    'Handlebars popup & icon templating.',
+    'Plots every geometry row from the query on a Leaflet map. Hover to ' +
+    'see pop-ups – click/tap navigates (if configured).',
   display_state_form: false,
   get_state_fields: () => [],
   configuration_workflow: configurationWorkflow,
@@ -337,6 +343,8 @@ ${createBtnHTML}
 <div id="${mapId}" class="border rounded" style="height:${height}px;"></div>
 <script>
 (function(){
+  /* ─── Config & constants (embedded server-side) ─── */
+  const DBG=${js(PLUGIN_DEBUG)};
   const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
         hbJs=${js(HANDLEBARS_CDN)},
         geo=${js(collection)}, id=${js(mapId)},
@@ -344,7 +352,7 @@ ${createBtnHTML}
         grp=${js(groupField)},
         tplSrc=${js(popupTemplate)}, iconTplSrc=${js(iconTemplate)};
 
-  /* Loader helpers */
+  /* Loader helpers – ensure idempotent asset loading */
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
   function haveJs(s){return !!(document._loadedScripts&&document._loadedScripts[s]);}
   function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
@@ -355,32 +363,32 @@ ${createBtnHTML}
       document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
     document.head.appendChild(sc);});}
 
-  /* Simple colour-palette for grouping */
+  /* Colour palette for group-by */
   const PALETTE=['red','blue','green','orange','purple','darkred','cadetblue',
                  'darkgreen','darkblue','darkpurple'];
   const grpColour={};
 
-  /* Main */
+  /* ─────────────────────────── Main async bootstrap ───────────────────────── */
   (async()=>{await loadCss(css);await loadJs(jsSrc);
     if(tplSrc||iconTplSrc) await loadJs(hbJs);
 
-    /* Pre-compile templates if present */
     const popupFn = (window.Handlebars&&tplSrc)?Handlebars.compile(tplSrc):null;
     const iconFn  = (window.Handlebars&&iconTplSrc)?Handlebars.compile(iconTplSrc):null;
 
+    /* Map initialisation */
     const map=L.map(id).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       { attribution:'&copy; OpenStreetMap' }).addTo(map);
 
-    /* Determine per-row marker */
+    /* ─── Marker factory ─── */
     function buildMarker(f,latlng){
       /* 1. Icon template overrides everything */
       if(iconFn){
         let html='';
-        try{html=iconFn(f.properties);}catch(e){console.error(e);}
-        if(!html) return L.marker(latlng); /* fallback */
+        try{html=iconFn(f.properties);}catch(e){if(DBG)console.warn(e);}
+        if(!html) return L.marker(latlng);
 
-        /* Image URL vs raw HTML */
+        /* Image URL vs inline HTML */
         if(/^(https?:)?\\/\\/.+\\.(png|jpe?g|gif|svg)$/i.test(html)){
           const icon=L.icon({iconUrl:html,iconSize:[28,28],iconAnchor:[14,28]});
           return L.marker(latlng,{icon});
@@ -402,14 +410,14 @@ ${createBtnHTML}
         return L.marker(latlng,{icon});
       }
 
-      /* 3. Default Leaflet blue marker */
+      /* 3. Default Leaflet blue */
       return L.marker(latlng);
     }
 
+    /* ─── GeoJSON layer ─── */
     const layer=L.geoJSON(geo,{
       pointToLayer:function(f,latlng){return buildMarker(f,latlng);},
       style:function(f){
-        /* Polygon colouring when group used */
         if(iconFn) return {};
         if(!grp||!f.properties) return {};
         const g=f.properties[grp];
@@ -419,14 +427,36 @@ ${createBtnHTML}
         return {color:grpColour[g]};
       },
       onEachFeature:function(f,l){
+        /* ----- Popup content resolution ----- */
         let popContent='';
         if(popupFn){
-          try{popContent=popupFn(f.properties);}catch(e){console.error(e);}
+          try{popContent=popupFn(f.properties);}catch(e){if(DBG)console.warn(e);}
         }else if(lbl&&f.properties&&f.properties[lbl]!==undefined){
           popContent=String(f.properties[lbl]);
         }
-        if(popContent) l.bindPopup(popContent);
 
+        /* ----- Hover/touch-hover pop-up behaviour ----- */
+        if(popContent){
+          const show=function(e){
+            try{
+              const ll=e?.latlng|| (l.getBounds?l.getBounds().getCenter(): l.getLatLng?.());
+              if(!ll) return;
+              l.__pcHoverPopup=L.popup({closeButton:false,autoClose:true})
+                                 .setLatLng(ll).setContent(popContent).openOn(map);
+            }catch(err){if(DBG)console.error(err);}
+          };
+          const hide=function(){
+            try{
+              if(l.__pcHoverPopup){map.closePopup(l.__pcHoverPopup);l.__pcHoverPopup=null;}
+            }catch(err){if(DBG)console.error(err);}
+          };
+          l.on('mouseover',show);
+          l.on('mouseout',hide);
+          l.on('touchstart',show);
+          l.on('touchend touchcancel',hide);
+        }
+
+        /* ----- Click navigation (kept distinct) ----- */
         if(navView&&f.properties&&f.properties.__id){
           l.on('click',()=>{window.location.href='/view/'+navView+'?id='+f.properties.__id;});
         }
