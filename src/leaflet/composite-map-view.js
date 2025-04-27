@@ -2,17 +2,14 @@
  * composite-map-view.js
  * -----------------------------------------------------------------------------
  * View-template “composite_map” – plots every geometry row returned by the
- * query on one interactive Leaflet map.
+ * query on one interactive Leaflet map.  Version 4 introduces **optional**
+ * Leaflet-providers support so administrators can select any community
+ * basemap without dragging the extra JS into the browser unless needed.
  *
- * v3 – 2025-04-26
- *   • Hover/touch-hover pop-ups: the configured popup (via simple column or
- *     Handlebars template) now appears when the user hovers a feature with a
- *     mouse or taps-and-holds on touch devices.
- *   • Click/navigation separation: single-click (or the touch equivalent)
- *     triggers the optional *click view* navigation **without** opening the
- *     pop-up, resolving the long-standing conflict.
- *
- * All debug output remains controllable via PLUGIN_DEBUG in src/constants.js.
+ * v4 – 2025-04-27
+ *   • Full Leaflet-providers integration (conditional loading).
+ *   • 2-page settings wizard: “Data & Pop-ups” and “Tile Provider”.
+ *   • Extensive debug instrumentation gated by PLUGIN_DEBUG.
  *
  * Author:      Troy Kelly <troy@team.production.city>
  * Licence:     CC0-1.0
@@ -31,6 +28,7 @@ const Form = require('@saltcorn/data/models/form');
 const { wktToGeoJSON } = require('../utils/geometry');
 const {
   LEAFLET,
+  LEAFLET_PROVIDERS,
   DEFAULT_CENTER,
   PLUGIN_DEBUG,
 } = require('../constants');
@@ -66,9 +64,9 @@ function js(v) {
  * @param {import('@saltcorn/types').Field[]} fields
  * @returns {import('@saltcorn/types').TypeAttribute[]}
  */
-function buildConfigFields(fields) {
+function buildDataFields(fields) {
   const opts = fields.map((f) => f.name);
-  dbg.debug('buildConfigFields()', { opts });
+  dbg.debug('buildDataFields()', { opts });
 
   return [
     /* ───── BASIC ───── */
@@ -167,6 +165,43 @@ function buildConfigFields(fields) {
 }
 
 /**
+ * Second wizard page – tile provider settings.
+ *
+ * Administrators may leave everything off to stay with stock OSM.  Toggling
+ * the provider loads the additional JS only on the client views that need it.
+ *
+ * @returns {import('@saltcorn/types').TypeAttribute[]}
+ */
+function buildProviderFields() {
+  return [
+    {
+      name: 'tile_provider_enabled',
+      label: 'Enable Leaflet-providers basemap',
+      sublabel: 'When OFF, the default OpenStreetMap tiles are used.',
+      type: 'Bool',
+      default: false,
+    },
+    {
+      name: 'tile_provider_name',
+      label: 'Provider key',
+      sublabel: 'e.g. "Stadia.AlidadeSmooth", "CartoDB.DarkMatter".',
+      type: 'String',
+      showIf: { tile_provider_enabled: true }, // Saltcorn >=1.0
+    },
+    {
+      name: 'tile_provider_options',
+      label: 'Provider options (JSON)',
+      sublabel:
+        'Optional raw JSON for custom API keys, attribution, etc.  Leave ' +
+        'blank to use the provider defaults.  Example: {"apikey":"XYZ"}.',
+      type: 'String',
+      attributes: { input_type: 'textarea', rows: 4 },
+      showIf: { tile_provider_enabled: true },
+    },
+  ];
+}
+
+/**
  * Resolve the Table regardless of Saltcorn’s call signature.
  *
  * @param {unknown[]} sig
@@ -221,7 +256,7 @@ async function resolveTable(sig) {
 }
 
 /**
- * configuration_workflow – universal across Saltcorn versions.
+ * configuration_workflow – two-page wizard.
  */
 function configurationWorkflow(...sig) {
   dbg.info('configurationWorkflow()', { rawSignature: sig });
@@ -229,12 +264,19 @@ function configurationWorkflow(...sig) {
   return new Workflow({
     steps: [
       {
-        name: 'settings',
+        name: 'Data & Pop-ups',
         form: async () => {
           const tbl = await resolveTable(sig);
           const flds = tbl ? await tbl.getFields() : [];
-          dbg.info('Config form fields', { count: flds.length });
-          return new Form({ fields: buildConfigFields(flds) });
+          dbg.info('Config form fields (page 1)', { count: flds.length });
+          return new Form({ fields: buildDataFields(flds) });
+        },
+      },
+      {
+        name: 'Tile Provider',
+        form: async () => {
+          dbg.info('Config form (page 2) – tile provider');
+          return new Form({ fields: buildProviderFields() });
         },
       },
     ],
@@ -264,22 +306,35 @@ const compositeMapTemplate = {
   async run(tableRef, viewname, cfg, state) {
     dbg.info('composite_map.run()', { tableRef, cfg, state });
 
-    /* ───── Config unwrap ───── */
-    const geomCol = cfg.geometry_field || 'geom';
-    const popupField = cfg.popup_field || '';
+    /* ───── Config unwrap (page 1) ───── */
+    const geomCol       = cfg.geometry_field || 'geom';
+    const popupField    = cfg.popup_field || '';
     const popupTemplate = cfg.popup_template || '';
-    const iconTemplate = cfg.icon_template || '';
+    const iconTemplate  = cfg.icon_template || '';
 
     const clickView = cfg.click_view || '';
-    const height = Number(cfg.height) || 300;
+    const height    = Number(cfg.height) || 300;
 
     const showCreate = cfg.show_create && cfg.create_view;
     const createView = cfg.create_view || '';
 
     const orderField = cfg.order_field || '';
-    const orderDesc = !!cfg.order_desc;
+    const orderDesc  = !!cfg.order_desc;
     const groupField = cfg.group_field || '';
-    const rowLimit = Number(cfg.row_limit) || 0;
+    const rowLimit   = Number(cfg.row_limit) || 0;
+
+    /* ───── Config unwrap (page 2) ───── */
+    const providerEnabled = !!cfg.tile_provider_enabled;
+    const providerName    = cfg.tile_provider_name || '';
+    let   providerOpts    = {};
+    if (providerEnabled && cfg.tile_provider_options) {
+      try {
+        providerOpts = JSON.parse(cfg.tile_provider_options);
+      } catch (e) {
+        dbg.warn('Invalid JSON in tile_provider_options – ignored.', e);
+      }
+    }
+    dbg.debug('Provider settings', { providerEnabled, providerName, providerOpts });
 
     /* ───── Fetch table + rows ───── */
     const where =
@@ -347,10 +402,13 @@ ${createBtnHTML}
   const DBG=${js(PLUGIN_DEBUG)};
   const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
         hbJs=${js(HANDLEBARS_CDN)},
+        providerJs=${js(LEAFLET_PROVIDERS.js)},
         geo=${js(collection)}, id=${js(mapId)},
         lbl=${js(popupField)}, navView=${js(clickView)},
         grp=${js(groupField)},
-        tplSrc=${js(popupTemplate)}, iconTplSrc=${js(iconTemplate)};
+        tplSrc=${js(popupTemplate)}, iconTplSrc=${js(iconTemplate)},
+        provEnabled=${js(providerEnabled)}, provName=${js(providerName)},
+        provOpts=${js(providerOpts)};
 
   /* Loader helpers – ensure idempotent asset loading */
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
@@ -371,14 +429,27 @@ ${createBtnHTML}
   /* ─────────────────────────── Main async bootstrap ───────────────────────── */
   (async()=>{await loadCss(css);await loadJs(jsSrc);
     if(tplSrc||iconTplSrc) await loadJs(hbJs);
+    if(provEnabled) await loadJs(providerJs);
 
     const popupFn = (window.Handlebars&&tplSrc)?Handlebars.compile(tplSrc):null;
     const iconFn  = (window.Handlebars&&iconTplSrc)?Handlebars.compile(iconTplSrc):null;
 
     /* Map initialisation */
     const map=L.map(id).setView([${lat},${lng}],${zoom});
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      { attribution:'&copy; OpenStreetMap' }).addTo(map);
+
+    /* Base layer */
+    let baseLayer;
+    if(provEnabled && window.L && L.tileLayer && L.tileLayer.provider && provName){
+      try{
+        baseLayer=L.tileLayer.provider(provName, provOpts).addTo(map);
+      }catch(e){
+        if(DBG)console.error('Provider load failed, falling back to OSM',e);
+      }
+    }
+    if(!baseLayer){
+      baseLayer=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        { attribution:'&copy; OpenStreetMap' }).addTo(map);
+    }
 
     /* ─── Marker factory ─── */
     function buildMarker(f,latlng){

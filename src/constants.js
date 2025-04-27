@@ -1,10 +1,10 @@
 /**
  * constants.js
  * ---------------------------------------------------------------------------
- * Immutable constants shared across the Saltcorn PostGIS plug‑in.
+ * Immutable constants shared across the Saltcorn PostGIS plug-in.
  *
- * Author:  Troy Kelly  <troy@team.production.city>
- * Licence: CC0‑1.0
+ * Author:  Troy Kelly  <troy@team.production.city>
+ * Licence: CC0-1.0
  */
 
 'use strict';
@@ -13,19 +13,19 @@
 
 /**
  * Should we output debug information.
+ * Toggle once in production environments to silence all plug-in chatter.
  * @type {boolean}
  */
 const PLUGIN_DEBUG = true;
 
-
 /**
- * NPM package / plug‑in slug – used for building public URLs.
+ * NPM package / plug-in slug – used for building public URLs.
  * @type {string}
  */
 const PLUGIN_SLUG = 'saltcorn-postgis-type';
 
 /**
- * Default SRID (EPSG:4326 – WGS‑84 lat‑lon).
+ * Default SRID (EPSG:4326 – WGS-84 lat-lon).
  * @type {number}
  */
 const DEFAULT_SRID = 4326;
@@ -37,7 +37,7 @@ const DEFAULT_SRID = 4326;
 const DIM_MODS = Object.freeze(['', 'Z', 'M', 'ZM']);
 
 /**
- * Canonical geometry sub‑types (upper‑case) for validation.
+ * Canonical geometry sub-types (upper-case) for validation.
  * @type {ReadonlyArray<string>}
  */
 const BASE_GEOM_TYPES = Object.freeze([
@@ -58,7 +58,7 @@ const DEFAULT_CENTER = Object.freeze({
 });
 
 /**
- * Local Leaflet 1.9.4 assets bundled inside the plug‑in’s “public” folder.
+ * Local Leaflet 1.9.4 assets bundled inside the plug-in’s “public” folder.
  *
  * @typedef {Object} LeafletStatic
  * @property {string} css   – Absolute URL of leaflet.css
@@ -85,6 +85,23 @@ const LEAFLET = Object.freeze({
   },
 });
 
+/**
+ * Leaflet-providers add-on – exposes 200+ community tile servers.
+ * The script is loaded on-demand when a view actively uses a provider.
+ *
+ * @typedef {Object} LeafletProvidersStatic
+ * @property {string} js
+ * @property {() => string} header
+ */
+
+/** @type {LeafletProvidersStatic} */
+const LEAFLET_PROVIDERS = Object.freeze({
+  js: `/plugins/public/${PLUGIN_SLUG}/leaflet-providers/leaflet-providers.js`,
+  header() {
+    return `<script id="sc-leaflet-providers" src="${this.js}" defer></script>`;
+  },
+});
+
 module.exports = {
   PLUGIN_DEBUG,
   PLUGIN_SLUG,
@@ -93,4 +110,5 @@ module.exports = {
   BASE_GEOM_TYPES,
   LEAFLET,
   DEFAULT_CENTER,
+  LEAFLET_PROVIDERS,
 };
