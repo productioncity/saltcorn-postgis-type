@@ -87,7 +87,6 @@ const LEAFLET = Object.freeze({
 
 /**
  * Leaflet-providers add-on – exposes 200 + community tile servers.
- * The script is loaded on-demand when a view actively uses a provider.
  *
  * @typedef {Object} LeafletProvidersStatic
  * @property {string} js
@@ -103,8 +102,7 @@ const LEAFLET_PROVIDERS = Object.freeze({
 });
 
 /**
- * Leaflet-gesture-handling add-on – improves UX on touch devices by forcing
- * two-finger pan / ⌘ + scroll zoom.  Loaded dynamically only when enabled.
+ * Leaflet-gesture-handling add-on – improves UX on touch devices.
  *
  * @typedef {Object} LeafletGestureStatic
  * @property {string} js
@@ -119,6 +117,26 @@ const LEAFLET_GESTURE = Object.freeze({
   },
 });
 
+/**
+ * Leaflet-Locate-Control add-on – elegant geolocation control.
+ *
+ * @typedef {Object} LeafletLocateStatic
+ * @property {string} css
+ * @property {string} js
+ * @property {() => string} header
+ */
+
+/** @type {LeafletLocateStatic} */
+const LEAFLET_LOCATE = Object.freeze({
+  css: `/plugins/public/${PLUGIN_SLUG}/leaflet-locatecontrol/L.Control.Locate.min.css`,
+  js: `/plugins/public/${PLUGIN_SLUG}/leaflet-locatecontrol/L.Control.Locate.min.js`,
+  header() {
+    return `
+<link id="sc-leaflet-locate-css" rel="stylesheet" href="${this.css}">
+<script id="sc-leaflet-locate-js" src="${this.js}" defer></script>`;
+  },
+});
+
 module.exports = {
   PLUGIN_DEBUG,
   PLUGIN_SLUG,
@@ -129,4 +147,5 @@ module.exports = {
   DEFAULT_CENTER,
   LEAFLET_PROVIDERS,
   LEAFLET_GESTURE,
+  LEAFLET_LOCATE,
 };
