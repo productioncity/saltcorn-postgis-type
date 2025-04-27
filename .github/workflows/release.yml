@@ -111,6 +111,20 @@ jobs:
           VERSION: ${{ steps.semver.outputs.VERSION }}
 
       # -----------------------------------------------------------------------
+      # 6b. Disable runtime debug logging
+      # -----------------------------------------------------------------------
+      - name: Disable PLUGIN_DEBUG in production build
+        run: |
+          set -euo pipefail
+          # Ensure constants.js exists and replace the debug flag to false
+          if grep -qE "const PLUGIN_DEBUG = true;" src/constants.js; then
+            sed -i -E "s/const PLUGIN_DEBUG = true;/const PLUGIN_DEBUG = false;/" src/constants.js
+            echo "PLUGIN_DEBUG set to false"
+          else
+            echo "PLUGIN_DEBUG already false or not found"
+          fi
+
+      # -----------------------------------------------------------------------
       # 7. Install dependencies (immutable → enforces yarn.lock)
       # -----------------------------------------------------------------------
       - name: Yarn install (immutable)
