@@ -2,29 +2,19 @@
 /**
  * populate-public.js
  * -----------------------------------------------------------------------------
- * A **stand-alone** Node.js helper that downloads and unpacks every asset
- * defined in `public-files.json`, creating the ready-to-serve `public/`
- * directory used by Saltcorn at run-time.
+ * Downloads and unpacks the assets listed in `public-files.json` so Saltcorn
+ * can serve them from the `public/` folder.
  *
- * Key features
- *   • Transparent HTTP → HTTPS redirect handling (GitHub, SourceForge, S3 …)  
- *   • No runtime npm dependencies – only built-in Node ≥ 18 APIs  
- *   • Works on Linux/macOS/Windows runners (requires `tar` + `unzip` CLIs)  
+ * Highlights
+ *   • Follows up to 10 redirects (GitHub, SourceForge, …)                │
+ *   • Transparently extracts .zip / .tar.* / .tgz archives               │
+ *   • If an archive contains a top-level **dist/** folder, _only_ the    │
+ *     contents of that folder are kept (common in many Leaflet plugins). │
+ *   • No runtime npm deps – uses only Node ≥ 18 built-ins + system tar    │
+ *     and unzip.                                                         │
  *
- * Directory layout
- *   public/leaflet/…              ← Leaflet core assets
- *   public/<plugin-name>/…        ← Each Leaflet plug-in
- *
- * Usage (local developer):
- *   $ node scripts/populate-public.js
- *
- * Usage (GitHub Actions):
- *   - name: Fetch public assets
- *     run: node scripts/populate-public.js
- *
- * Author:      Troy Kelly <troy@team.production.city>
- * First Issue: 27 Apr 2025
- * Licence:     CC0-1.0
+ * Author:  Troy Kelly <troy@team.production.city>   (CC0-1.0)
+ * First:   27 Apr 2025
  */
 
 /* eslint-disable node/no-process-exit */
@@ -45,79 +35,68 @@ const { promisify } = require('node:util');
 const pump = promisify(pipeline);
 
 /* ──────────────── CLI helpers & global constants ─────────────────── */
-const ROOT_DIR       = path.resolve(__dirname, '..');
-const PUBLIC_DIR     = path.join(ROOT_DIR, 'public');
-const MANIFEST_SRC   = path.join(ROOT_DIR, 'public-files.json');
-const TMP_DIR        = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-pgis-'));
-const MAX_REDIRECTS  = 10; // safety valve to prevent infinite loops
+const ROOT_DIR      = path.resolve(__dirname, '..');
+const PUBLIC_DIR    = path.join(ROOT_DIR, 'public');
+const MANIFEST_SRC  = path.join(ROOT_DIR, 'public-files.json');
+const TMP_DIR       = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-pgis-'));
+const MAX_REDIRECTS = 10;
 
 /**
  * Basic colourised console output.
  */
 const ui = {
-  info:  (msg) => console.log(`\x1b[34mℹ︎\x1b[0m ${msg}`),
-  warn:  (msg) => console.warn(`\x1b[33m⚠\x1b[0m ${msg}`),
-  error: (msg) => console.error(`\x1b[31m✖\x1b[0m ${msg}`),
-  ok:    (msg) => console.log(`\x1b[32m✔\x1b[0m ${msg}`),
+  info:  (m) => console.log(`\x1b[34mℹ︎\x1b[0m ${m}`),
+  ok:    (m) => console.log(`\x1b[32m✔\x1b[0m ${m}`),
+  warn:  (m) => console.warn(`\x1b[33m⚠\x1b[0m ${m}`),
+  error: (m) => console.error(`\x1b[31m✖\x1b[0m ${m}`),
 };
 
 /* ──────────────────── Low-level utility functions ────────────────── */
 
 /**
- * Download a remote file (HTTP/HTTPS) to the supplied destination path
- * following **up to MAX_REDIRECTS** redirects.
+ * Download `url` to `dest`, transparently following redirects.
  *
- * The destination directory is created automatically.
- *
- * @param {string} url          Absolute or scheme-relative URL
- * @param {string} dest         Absolute file path on disk
- * @param {number} [depth=0]    Recursion depth for redirect tracking
+ * @param {string} url
+ * @param {string} dest
+ * @param {number} depth
  * @returns {Promise<void>}
  */
 async function download(url, dest, depth = 0) {
   if (depth > MAX_REDIRECTS) {
     throw new Error(`Too many redirects while fetching ${url}`);
   }
-
   await fsp.mkdir(path.dirname(dest), { recursive: true });
-
-  /** @type {typeof http | typeof https} */
-  const proto = url.startsWith('https:') ? https : http;
-
   ui.info((depth ? '↪ ' : '') + `Downloading ${url}`);
 
   await new Promise((resolve, reject) => {
-    proto
+    const lib = url.startsWith('https:') ? https : http;
+    lib
       .get(url, (res) => {
-        /* Redirect handling ------------------------------------------------ */
+        /* ─── Redirect ─── */
         if (
           res.statusCode &&
           [301, 302, 303, 307, 308].includes(res.statusCode)
         ) {
-          const loc = res.headers.location;
-          if (!loc) {
-            reject(new Error(`Redirect (${res.statusCode}) with no location`));
+          if (!res.headers.location) {
+            reject(
+              new Error(
+                `Redirect (${res.statusCode}) but no Location header for ${url}`,
+              ),
+            );
             return;
           }
-          // Drain response before follow-up to free sockets
+          const next = new URL(res.headers.location, url).toString();
           res.resume();
-          const next = new URL(loc, url).toString();
-          download(next, dest, depth + 1)
-            .then(resolve)
-            .catch(reject);
+          download(next, dest, depth + 1).then(resolve).catch(reject);
           return;
         }
-
-        /* Error response --------------------------------------------------- */
+        /* ─── Error status ─── */
         if (res.statusCode && res.statusCode >= 400) {
           reject(new Error(`HTTP ${res.statusCode} while fetching ${url}`));
           return;
         }
-
-        /* Success ---------------------------------------------------------- */
-        pump(res, fs.createWriteStream(dest))
-          .then(resolve)
-          .catch((err) => reject(err));
+        /* ─── Success ─── */
+        pump(res, fs.createWriteStream(dest)).then(resolve).catch(reject);
       })
       .on('error', reject);
   });
@@ -126,30 +105,55 @@ async function download(url, dest, depth = 0) {
 }
 
 /**
- * Run a shell command synchronously, capturing stderr/stdout.
+ * Synchronously run a shell command; throws on non-zero exit.
  *
  * @param {string} cmd
  * @param {string[]} args
- * @param {object} opts
- * @returns {void}
+ * @param {object} [opts]
  */
 function run(cmd, args, opts = {}) {
   const out = spawnSync(cmd, args, { stdio: 'inherit', ...opts });
   if (out.error) throw out.error;
-  if (out.status !== 0) {
-    throw new Error(`${cmd} exited with code ${out.status}`);
-  }
+  if (out.status !== 0) throw new Error(`${cmd} exited with ${out.status}`);
 }
 
 /**
- * Extract an archive (zip/tar/tgz/tar.gz/tar.xz/…).
+ * Recursively copy a directory (Node ≥ 18 `fs.cpSync`).
  *
- * The first *single* top-level directory (common in GitHub releases) is
- * stripped, so the final assets sit directly in the target folder.
+ * @param {string} from
+ * @param {string} to
+ */
+function copyDir(from, to) {
+  fs.cpSync(from, to, { recursive: true, force: true, errorOnExist: false });
+}
+
+/**
+ * Search `root` recursively for the FIRST directory literally named `dist`.
+ *
+ * @param {string} root
+ * @returns {string|undefined} absolute path of the dist dir
+ */
+function findDistDir(root) {
+  const stack = [root];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const ent of fs.readdirSync(cur)) {
+      const full = path.join(cur, ent);
+      if (fs.statSync(full).isDirectory()) {
+        if (ent.toLowerCase() === 'dist') return full;
+        stack.push(full);
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extract an archive and, if a `dist/` directory exists inside it, promote
+ * **only that folder’s contents** to `destDir`.
  *
  * @param {string} archivePath
  * @param {string} destDir
- * @returns {void}
  */
 function extractArchive(archivePath, destDir) {
   ui.info(
@@ -159,17 +163,15 @@ function extractArchive(archivePath, destDir) {
     )}`,
   );
 
-  const lower = archivePath.toLowerCase();
-
   fs.rmSync(destDir, { recursive: true, force: true });
   fs.mkdirSync(destDir, { recursive: true });
 
+  const lower = archivePath.toLowerCase();
   if (lower.endsWith('.zip')) {
-    // Prefer system unzip; fall back to bsdtar if available.
     try {
       run('unzip', ['-q', '-o', archivePath, '-d', destDir]);
     } catch {
-      ui.warn('`unzip` failed or not present – trying `tar`');
+      ui.warn('`unzip` unavailable – falling back to `tar`');
       run('tar', ['-xf', archivePath, '-C', destDir]);
     }
   } else if (
@@ -181,7 +183,6 @@ function extractArchive(archivePath, destDir) {
     lower.endsWith('.tbz2') ||
     lower.endsWith('.tar')
   ) {
-    // Determine decompression flag by extension for portability.
     const flag =
       lower.endsWith('.tar.gz') || lower.endsWith('.tgz')
         ? 'z'
@@ -195,30 +196,42 @@ function extractArchive(archivePath, destDir) {
     throw new Error(`Unsupported archive format: ${archivePath}`);
   }
 
-  /* ── Flatten single top-level directory (common in GitHub archives) ── */
-  const top = fs.readdirSync(destDir);
-  if (top.length === 1) {
-    const nested = path.join(destDir, top[0]);
-    if (fs.statSync(nested).isDirectory()) {
-      for (const entry of fs.readdirSync(nested)) {
-        fs.renameSync(path.join(nested, entry), path.join(destDir, entry));
+  /* ── Flatten single top-level directory ─────────────────────────── */
+  const first = fs.readdirSync(destDir);
+  if (first.length === 1) {
+    const maybe = path.join(destDir, first[0]);
+    if (fs.statSync(maybe).isDirectory()) {
+      for (const entry of fs.readdirSync(maybe)) {
+        fs.renameSync(path.join(maybe, entry), path.join(destDir, entry));
       }
-      fs.rmdirSync(nested);
+      fs.rmSync(maybe, { recursive: true, force: true });
     }
+  }
+
+  /* ── dist/ handling ─────────────────────────────────────────────── */
+  const distPath = findDistDir(destDir);
+  if (distPath && distPath !== destDir) {
+    ui.info('Found dist/ folder – using its contents only');
+    const tmp = path.join(TMP_DIR, `dist-tmp-${Date.now()}`);
+    copyDir(distPath, tmp);
+
+    fs.rmSync(destDir, { recursive: true, force: true });
+    fs.mkdirSync(destDir, { recursive: true });
+    copyDir(tmp, destDir);
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 
   ui.ok(`Extracted ${path.basename(archivePath)}`);
 }
 
-/* ───────────────────── Higher-level work functions ────────────────── */
+/* ───────────────────── Higher-level work functions ───────────────── */
 
 /**
- * Process a single manifest entry (Leaflet or plug-in).
+ * Process one manifest record (Leaflet or plugin).
  *
- * @param {string}  name        Target directory name under public/
- * @param {object}  record      Manifest record
- * @param {boolean} isLeaflet   Special housekeeping for Leaflet core
- * @returns {Promise<void>}
+ * @param {string}  name
+ * @param {object}  record
+ * @param {boolean} isLeaflet
  */
 async function processEntry(name, record, isLeaflet = false) {
   const destDir = path.join(PUBLIC_DIR, name);
@@ -226,7 +239,6 @@ async function processEntry(name, record, isLeaflet = false) {
   fs.mkdirSync(destDir, { recursive: true });
 
   if (record.releasefile) {
-    /* ---------------- Archive path ---------------- */
     const tmpPath = path.join(
       TMP_DIR,
       `${name}-${path.basename(record.releasefile)}`,
@@ -234,43 +246,38 @@ async function processEntry(name, record, isLeaflet = false) {
     await download(record.releasefile, tmpPath);
     extractArchive(tmpPath, destDir);
   } else if (Array.isArray(record.files)) {
-    /* ---------------- Individual files ------------ */
-    for (const fileURL of record.files) {
-      const fileName = path.basename(new URL(fileURL).pathname);
-      const destPath = path.join(destDir, fileName);
-      await download(fileURL, destPath);
+    for (const url of record.files) {
+      const fileName = path.basename(new URL(url).pathname);
+      await download(url, path.join(destDir, fileName));
     }
   } else {
-    ui.warn(`No 'releasefile' or 'files' defined for ${name} – skipped.`);
+    ui.warn(`Manifest entry for ${name} has neither files nor releasefile`);
   }
 
-  /* -------- Leaflet: ensure canonical file names at root -------- */
+  /* Leaflet housekeeping – ensure canonical filenames at root */
   if (isLeaflet) {
-    const leafJs = locateFile(destDir, /leaflet(?:\.min)?\.js$/i);
-    const leafCss = locateFile(destDir, /leaflet(?:\.min)?\.css$/i);
-
-    if (leafJs) fs.copyFileSync(leafJs, path.join(destDir, 'leaflet.js'));
-    if (leafCss) fs.copyFileSync(leafCss, path.join(destDir, 'leaflet.css'));
+    const js = locateFile(destDir, /leaflet(?:\.min)?\.js$/i);
+    const css = locateFile(destDir, /leaflet(?:\.min)?\.css$/i);
+    if (js) fs.copyFileSync(js, path.join(destDir, 'leaflet.js'));
+    if (css) fs.copyFileSync(css, path.join(destDir, 'leaflet.css'));
   }
 }
 
 /**
- * Locate the first file under a directory (recursive) that matches the given
- * `RegExp`. Returns the absolute path or *undefined*.
+ * Recursively find the first file whose basename matches `re`.
  *
  * @param {string} dir
  * @param {RegExp} re
- * @returns {string | undefined}
+ * @returns {string|undefined}
  */
 function locateFile(dir, re) {
   const stack = [dir];
   while (stack.length) {
     const cur = stack.pop();
-    for (const entry of fs.readdirSync(cur)) {
-      const full = path.join(cur, entry);
-      const st = fs.statSync(full);
-      if (st.isDirectory()) stack.push(full);
-      else if (re.test(entry)) return full;
+    for (const ent of fs.readdirSync(cur)) {
+      const full = path.join(cur, ent);
+      if (fs.statSync(full).isDirectory()) stack.push(full);
+      else if (re.test(ent)) return full;
     }
   }
   return undefined;
@@ -281,27 +288,21 @@ function locateFile(dir, re) {
 (async () => {
   try {
     ui.info('──────────────────────────────────────────────────────────────');
-    ui.info('Populating public/ assets from public-files.json …');
+    ui.info('Populating public/ assets from manifest …');
 
-    /* 1 ─ Load manifest --------------------------------------------------- */
     const manifest = JSON.parse(await fsp.readFile(MANIFEST_SRC, 'utf8'));
-
-    /* 2 ─ Ensure public/ exists ------------------------------------------ */
     await fsp.mkdir(PUBLIC_DIR, { recursive: true });
 
-    /* 3 ─ Leaflet core ---------------------------------------------------- */
     if (manifest.leaflet) {
       await processEntry('leaflet', manifest.leaflet, true);
     }
-
-    /* 4 ─ Plug-ins -------------------------------------------------------- */
     if (Array.isArray(manifest.plugins)) {
-      for (const plugin of manifest.plugins) {
-        await processEntry(plugin.name, plugin, false);
+      for (const p of manifest.plugins) {
+        await processEntry(p.name, p, false);
       }
     }
 
-    ui.ok('All assets downloaded and ready in /public ✨');
+    ui.ok('All assets ready in public/ 🎉');
     ui.info('──────────────────────────────────────────────────────────────');
   } catch (err) {
     ui.error(err.stack || err.message || String(err));
