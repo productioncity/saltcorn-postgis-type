@@ -22,21 +22,10 @@ const {
   LEAFLET_PROVIDERS,
   LEAFLET_GESTURE,
   LEAFLET_LOCATE,
+  PROVIDERS
 } = require('../constants');
 
 const dbg = require('../utils/debug');
-
-/* Short provider list for UI convenience */
-const PROVIDERS = Object.freeze([
-  'OpenStreetMap.Mapnik',
-  'CartoDB.Positron',
-  'CartoDB.DarkMatter',
-  'Stamen.Toner',
-  'Esri.WorldStreetMap',
-  'Esri.WorldImagery',
-  'HikeBike.HikeBike',
-  'OpenTopoMap',
-]);
 
 /* ───────────────────────── Config UI ───────────────────────── */
 
@@ -170,32 +159,32 @@ function leafletPointEditView(fieldName) {
       /* ------------------------------------------------------------------ */
       /* 1. DOM IDs & initial position                                      */
       /* ------------------------------------------------------------------ */
-      const id    = `${fieldName}_${Math.random().toString(36).slice(2)}`;
+      const id = `${fieldName}_${Math.random().toString(36).slice(2)}`;
       const input = `inp_${id}`;
 
-      const ll    = wktToLonLat(value) || [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat];
+      const ll = wktToLonLat(value) || [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat];
 
       /* ------------------------------------------------------------------ */
       /* 2. Leaflet add-ons (from combined cfg)                             */
       /* ------------------------------------------------------------------ */
       const providerEnabled = !!cfg.tile_provider_enabled;
-      const providerName    = cfg.tile_provider_name || '';
-      let   providerOpts    = {};
+      const providerName = cfg.tile_provider_name || '';
+      let providerOpts = {};
       if (providerEnabled && cfg.tile_provider_options) {
         try { providerOpts = JSON.parse(cfg.tile_provider_options); }
         // eslint-disable-next-line no-empty
-        catch {}
+        catch { }
       }
       const gestureEnabled = !!cfg.gesture_handling_enabled;
 
-      const locateEnabled     = !!cfg.locate_enabled;
-      const locateFollow      = cfg.locate_follow !== undefined
-                                  ? !!cfg.locate_follow : true;
-      const locateKeepZoom    = !!cfg.locate_keep_zoom;
-      const locateFlyTo       = !!cfg.locate_fly_to;
+      const locateEnabled = !!cfg.locate_enabled;
+      const locateFollow = cfg.locate_follow !== undefined
+        ? !!cfg.locate_follow : true;
+      const locateKeepZoom = !!cfg.locate_keep_zoom;
+      const locateFlyTo = !!cfg.locate_fly_to;
       const locateShowCompass = cfg.locate_show_compass !== undefined
-                                  ? !!cfg.locate_show_compass : true;
-      const locatePosition    = cfg.locate_position || 'topleft';
+        ? !!cfg.locate_show_compass : true;
+      const locatePosition = cfg.locate_position || 'topleft';
 
       const locateOpts = {
         position: locatePosition,

@@ -24,9 +24,9 @@
 
 const dbg = require('../utils/debug');
 
-const Table     = require('@saltcorn/data/models/table');
-const Workflow  = require('@saltcorn/data/models/workflow');
-const Form      = require('@saltcorn/data/models/form');
+const Table = require('@saltcorn/data/models/table');
+const Workflow = require('@saltcorn/data/models/workflow');
+const Form = require('@saltcorn/data/models/form');
 
 const { wktToGeoJSON } = require('../utils/geometry');
 const {
@@ -36,6 +36,7 @@ const {
   LEAFLET_LOCATE,
   DEFAULT_CENTER,
   PLUGIN_DEBUG,
+  PROVIDERS
 } = require('../constants');
 
 /* Optional: runtime Handlebars (lazy-loaded via CDN in the browser) */
@@ -60,250 +61,6 @@ const ViewCls = ViewMod?.findOne ? ViewMod : ViewMod?.View ? ViewMod.View : View
 function js(v) {
   return JSON.stringify(v ?? null).replace(/</g, '\\u003c');
 }
-
-/* ------------------------------------------------------------------------- */
-/* Static provider list – drop-in from leaflet-providers catalogue           */
-/* ------------------------------------------------------------------------- */
-/* The list is hard-coded to avoid heavy parsing at start-up.                */
-const PROVIDERS = Object.freeze([
-  /* --- AzureMaps --- */
-  'AzureMaps.MicrosoftImagery',
-  'AzureMaps.MicrosoftBaseDarkGrey',
-  'AzureMaps.MicrosoftBaseRoad',
-  'AzureMaps.MicrosoftBaseHybridRoad',
-  'AzureMaps.MicrosoftTerraMain',
-  'AzureMaps.MicrosoftWeatherInfraredMain',
-  'AzureMaps.MicrosoftWeatherRadarMain',
-
-  /* --- BaseMapDE --- */
-  'BaseMapDE.Color',
-  'BaseMapDE.Grey',
-
-  /* --- BasemapAT --- */
-  'BasemapAT.basemap',
-  'BasemapAT.grau',
-  'BasemapAT.overlay',
-  'BasemapAT.terrain',
-  'BasemapAT.surface',
-  'BasemapAT.highdpi',
-  'BasemapAT.orthofoto',
-
-  /* --- CartoDB --- */
-  'CartoDB.Positron',
-  'CartoDB.PositronNoLabels',
-  'CartoDB.PositronOnlyLabels',
-  'CartoDB.DarkMatter',
-  'CartoDB.DarkMatterNoLabels',
-  'CartoDB.DarkMatterOnlyLabels',
-  'CartoDB.Voyager',
-  'CartoDB.VoyagerNoLabels',
-  'CartoDB.VoyagerOnlyLabels',
-  'CartoDB.VoyagerLabelsUnder',
-
-  /* --- CyclOSM & misc singletons --- */
-  'CyclOSM',
-  'FreeMapSK',
-  'MtbMap',
-  'OpenAIP',
-  'OpenFireMap',
-  'OpenRailwayMap',
-  'OpenSeaMap',
-  'OpenSnowMap.pistes',
-  'OPNVKarte',
-  'SafeCast',
-
-  /* --- Esri --- */
-  'Esri.WorldStreetMap',
-  'Esri.WorldTopoMap',
-  'Esri.WorldImagery',
-  'Esri.WorldTerrain',
-  'Esri.WorldShadedRelief',
-  'Esri.WorldPhysical',
-  'Esri.OceanBasemap',
-  'Esri.NatGeoWorldMap',
-  'Esri.WorldGrayCanvas',
-
-  /* --- GeoportailFrance --- */
-  'GeoportailFrance.plan',
-  'GeoportailFrance.parcels',
-  'GeoportailFrance.orthos',
-
-  /* --- HikeBike --- */
-  'HikeBike.HikeBike',
-  'HikeBike.HillShading',
-
-  /* --- HERE (legacy) --- */
-  'HERE.normalDay',
-  'HERE.normalDayGrey',
-  'HERE.normalNight',
-  'HERE.reducedDay',
-  'HERE.hybridDay',
-  'HERE.pedestrianDay',
-
-  /* --- HERE v3 --- */
-  'HEREv3.normalDay',
-  'HEREv3.normalNight',
-  'HEREv3.hybridDay',
-  'HEREv3.terrainDay',
-  'HEREv3.pedestrianNight',
-
-  /* --- Jawg --- */
-  'Jawg.Streets',
-  'Jawg.Terrain',
-  'Jawg.Lagoon',
-  'Jawg.Sunny',
-  'Jawg.Dark',
-  'Jawg.Light',
-  'Jawg.Matrix',
-
-  /* --- JusticeMap --- */
-  'JusticeMap.income',
-  'JusticeMap.americanIndian',
-  'JusticeMap.asian',
-  'JusticeMap.black',
-  'JusticeMap.hispanic',
-  'JusticeMap.multi',
-  'JusticeMap.nonWhite',
-  'JusticeMap.white',
-  'JusticeMap.plurality',
-
-  /* --- MapTilesAPI --- */
-  'MapTilesAPI.OSMEnglish',
-  'MapTilesAPI.OSMFrancais',
-  'MapTilesAPI.OSMEspagnol',
-
-  /* --- MapTiler Cloud --- */
-  'MapTiler.Streets',
-  'MapTiler.Basic',
-  'MapTiler.Bright',
-  'MapTiler.Pastel',
-  'MapTiler.Positron',
-  'MapTiler.Hybrid',
-  'MapTiler.Toner',
-  'MapTiler.Topo',
-  'MapTiler.Voyager',
-  'MapTiler.Ocean',
-  'MapTiler.Backdrop',
-  'MapTiler.Dataviz',
-  'MapTiler.DatavizLight',
-  'MapTiler.DatavizDark',
-  'MapTiler.Aquarelle',
-  'MapTiler.Landscape',
-  'MapTiler.Openstreetmap',
-  'MapTiler.Outdoor',
-  'MapTiler.Satellite',
-  'MapTiler.Winter',
-
-  /* --- NASAGIBS --- */
-  'NASAGIBS.ModisTerraTrueColorCR',
-  'NASAGIBS.ModisTerraBands367CR',
-  'NASAGIBS.ViirsEarthAtNight2012',
-  'NASAGIBS.ModisTerraLSTDay',
-  'NASAGIBS.ModisTerraSnowCover',
-  'NASAGIBS.ModisTerraAOD',
-  'NASAGIBS.ModisTerraChlorophyll',
-
-  /* --- nlmaps --- */
-  'nlmaps.standaard',
-  'nlmaps.pastel',
-  'nlmaps.grijs',
-  'nlmaps.water',
-  'nlmaps.luchtfoto',
-
-  /* --- NLS (UK Historic) --- */
-  'NLS.osgb63k1885',
-  'NLS.osgb1888',
-  'NLS.osgb10k1888',
-  'NLS.osgb1919',
-  'NLS.osgb25k1937',
-  'NLS.osgb63k1955',
-  'NLS.oslondon1k1893',
-
-  /* --- OneMap Singapore --- */
-  'OneMapSG.Default',
-  'OneMapSG.Night',
-  'OneMapSG.Original',
-  'OneMapSG.Grey',
-  'OneMapSG.LandLot',
-
-  /* --- OpenStreetMap & variants --- */
-  'OpenStreetMap',
-  'OpenStreetMap.Mapnik',
-  'OpenStreetMap.DE',
-  'OpenStreetMap.CH',
-  'OpenStreetMap.France',
-  'OpenStreetMap.HOT',
-  'OpenStreetMap.BZH',
-  'OpenStreetMap.CAT',
-
-  /* --- OpenWeatherMap (overlay tiles) --- */
-  'OpenWeatherMap.Clouds',
-  'OpenWeatherMap.CloudsClassic',
-  'OpenWeatherMap.Precipitation',
-  'OpenWeatherMap.PrecipitationClassic',
-  'OpenWeatherMap.Rain',
-  'OpenWeatherMap.RainClassic',
-  'OpenWeatherMap.Pressure',
-  'OpenWeatherMap.PressureContour',
-  'OpenWeatherMap.Wind',
-  'OpenWeatherMap.Temperature',
-  'OpenWeatherMap.Snow',
-
-  /* --- Stadia --- */
-  'Stadia.AlidadeSmooth',
-  'Stadia.AlidadeSmoothDark',
-  'Stadia.AlidadeSatellite',
-  'Stadia.OSMBright',
-  'Stadia.Outdoors',
-  'Stadia.StamenToner',
-  'Stadia.StamenTonerBackground',
-  'Stadia.StamenTonerLines',
-  'Stadia.StamenTonerLabels',
-  'Stadia.StamenTonerLite',
-  'Stadia.StamenWatercolor',
-  'Stadia.StamenTerrain',
-  'Stadia.StamenTerrainBackground',
-  'Stadia.StamenTerrainLabels',
-  'Stadia.StamenTerrainLines',
-
-  /* --- Swiss Federal Geoportal --- */
-  'SwissFederalGeoportal.NationalMapColor',
-  'SwissFederalGeoportal.NationalMapGrey',
-  'SwissFederalGeoportal.SWISSIMAGE',
-
-  /* --- Thunderforest --- */
-  'Thunderforest.OpenCycleMap',
-  'Thunderforest.Transport',
-  'Thunderforest.TransportDark',
-  'Thunderforest.SpinalMap',
-  'Thunderforest.Landscape',
-  'Thunderforest.Outdoors',
-  'Thunderforest.Pioneer',
-  'Thunderforest.MobileAtlas',
-  'Thunderforest.Neighbourhood',
-
-  /* --- TomTom --- */
-  'TomTom.Basic',
-  'TomTom.Hybrid',
-  'TomTom.Labels',
-
-  /* --- TopPlusOpen (DE) --- */
-  'TopPlusOpen.Color',
-  'TopPlusOpen.Grey',
-
-  /* --- USGS --- */
-  'USGS.USTopo',
-  'USGS.USImagery',
-  'USGS.USImageryTopo',
-
-  /* --- WaymarkedTrails --- */
-  'WaymarkedTrails.hiking',
-  'WaymarkedTrails.cycling',
-  'WaymarkedTrails.mtb',
-  'WaymarkedTrails.slopes',
-  'WaymarkedTrails.riding',
-  'WaymarkedTrails.skating',
-]);
 
 /**
  * Provider list accessor.  Wrapper future-proofs for later dynamic parsing.
@@ -555,7 +312,7 @@ async function resolveTable(sig) {
   if (!req) return undefined;
 
   if (req.view?.table_id) return TableCls.findOne({ id: req.view.table_id });
-  if (req.query?.table)   return TableCls.findOne({ name: req.query.table });
+  if (req.query?.table) return TableCls.findOne({ name: req.query.table });
 
   /* 3 – Path param sniffing (view name → table) */
   const vn =
@@ -578,7 +335,7 @@ function configurationWorkflow(...sig) {
       {
         name: 'Data & Pop-ups',
         form: async () => {
-          const tbl  = await resolveTable(sig);
+          const tbl = await resolveTable(sig);
           const flds = tbl ? await tbl.getFields() : [];
           return new Form({ fields: buildDataFields(flds) });
         },
@@ -623,44 +380,44 @@ const compositeMapTemplate = {
     dbg.info('composite_map.run()', { cfg });
 
     /* ───── page 1 config ───── */
-    const geomCol       = cfg.geometry_field   || 'geom';
-    const popupField    = cfg.popup_field      || '';
-    const popupTemplate = cfg.popup_template   || '';
-    const iconTemplate  = cfg.icon_template    || '';
+    const geomCol = cfg.geometry_field || 'geom';
+    const popupField = cfg.popup_field || '';
+    const popupTemplate = cfg.popup_template || '';
+    const iconTemplate = cfg.icon_template || '';
 
-    const clickView  = cfg.click_view || '';
-    const height     = Number(cfg.height) || 300;
+    const clickView = cfg.click_view || '';
+    const height = Number(cfg.height) || 300;
 
     const showCreate = cfg.show_create && cfg.create_view;
     const createView = cfg.create_view || '';
 
     const orderField = cfg.order_field || '';
-    const orderDesc  = !!cfg.order_desc;
+    const orderDesc = !!cfg.order_desc;
     const groupField = cfg.group_field || '';
-    const rowLimit   = Number(cfg.row_limit) || 0;
+    const rowLimit = Number(cfg.row_limit) || 0;
 
     /* ───── page 2 config ───── */
     const providerEnabled = !!cfg.tile_provider_enabled;
-    const providerName    = cfg.tile_provider_name || '';
-    let   providerOpts    = {};
+    const providerName = cfg.tile_provider_name || '';
+    let providerOpts = {};
     if (providerEnabled && cfg.tile_provider_options) {
       try { providerOpts = JSON.parse(cfg.tile_provider_options); }
       // eslint-disable-next-line no-empty
-      catch {} // ignore malformed JSON
+      catch { } // ignore malformed JSON
     }
 
     /* ───── page 3 config ───── */
     const gestureEnabled = !!cfg.gesture_handling_enabled;
 
     /* ───── page 4 config ───── */
-    const locateEnabled      = !!cfg.locate_enabled;
-    const locateFollow       = !!cfg.locate_follow;
-    const locateKeepZoom     = !!cfg.locate_keep_zoom;
-    const locateFlyTo        = !!cfg.locate_fly_to;
-    const locateShowCompass  = cfg.locate_show_compass !== undefined
-                                ? !!cfg.locate_show_compass
-                                : true;
-    const locatePosition     = cfg.locate_position || 'topleft';
+    const locateEnabled = !!cfg.locate_enabled;
+    const locateFollow = !!cfg.locate_follow;
+    const locateKeepZoom = !!cfg.locate_keep_zoom;
+    const locateFlyTo = !!cfg.locate_fly_to;
+    const locateShowCompass = cfg.locate_show_compass !== undefined
+      ? !!cfg.locate_show_compass
+      : true;
+    const locatePosition = cfg.locate_position || 'topleft';
 
     const locateOpts = {
       position: locatePosition,

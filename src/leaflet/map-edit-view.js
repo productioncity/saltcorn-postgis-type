@@ -27,6 +27,7 @@ const {
   LEAFLET_PROVIDERS,
   LEAFLET_GESTURE,
   LEAFLET_LOCATE,
+  PROVIDERS
 } = require('../constants');
 
 const {
@@ -37,22 +38,9 @@ const {
 
 const dbg = require('../utils/debug');
 
-const DRAW_JS  = 'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
+const DRAW_JS = 'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
 const DRAW_CSS = 'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css';
 const WELLKNOWN_JS = 'https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
-
-/* ───────────────────────────── Provider list ────────────────────────
- * A trimmed list from leaflet-providers for UI convenience.            */
-const PROVIDERS = Object.freeze([
-  'OpenStreetMap.Mapnik',
-  'CartoDB.Positron',
-  'CartoDB.DarkMatter',
-  'Stamen.Toner',
-  'Esri.WorldStreetMap',
-  'Esri.WorldImagery',
-  'HikeBike.HikeBike',
-  'OpenTopoMap',
-]);
 
 /* ────────────────────────── Helper functions ─────────────────────── */
 
@@ -70,16 +58,16 @@ function unpackArgs(args) {
   if (args[0] && typeof args[0] === 'object' && 'name' in args[0]) {
     // Field-object form
     // @ts-ignore
-    name  = args[0].name;
+    name = args[0].name;
     value = args[1] ?? '';
     attrs = args[0].attributes ?? {};
-    cls   = args[3];
+    cls = args[3];
   } else {
     // Primitive form
-    name  = args[0] ?? '';
+    name = args[0] ?? '';
     value = args[1] ?? '';
     attrs = args[2] ?? {};
-    cls   = args[3];
+    cls = args[3];
   }
   return { name, value: String(value ?? ''), attrs, cls };
 }
@@ -241,41 +229,41 @@ function mapEditView(fallbackType = '') {
       const viewCfg = resolveConfig(arguments);
       const cfg = { ...fieldAttrs, ...viewCfg }; // view config wins
 
-      const canonical   = toWkt(current) || String(current ?? '');
-      const expectType  = String((cfg.subtype ?? fallbackType)).toLowerCase();
-      const sridVal     = Number.isFinite(Number(cfg.srid))
-                            ? Number(cfg.srid)
-                            : 4326;
+      const canonical = toWkt(current) || String(current ?? '');
+      const expectType = String((cfg.subtype ?? fallbackType)).toLowerCase();
+      const sridVal = Number.isFinite(Number(cfg.srid))
+        ? Number(cfg.srid)
+        : 4326;
 
-      const mapId   = `map_${Math.random().toString(36).slice(2)}`;
+      const mapId = `map_${Math.random().toString(36).slice(2)}`;
       const inputId = `inp_${mapId}`;
 
       /* Z-dimension helpers -------------------------------------- */
       const dimAttr = String(cfg.dim ?? '').toUpperCase();
-      const wantZ   = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(canonical);
+      const wantZ = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(canonical);
       const initialZ = wantZ ? extractFirstZ(canonical) : 0;
-      const zId      = wantZ ? `z_${mapId}` : null;
+      const zId = wantZ ? `z_${mapId}` : null;
 
       /* --- Leaflet add-ons -------------------------------------- */
       const providerEnabled = !!cfg.tile_provider_enabled;
-      const providerName    = cfg.tile_provider_name || '';
-      let   providerOpts    = {};
+      const providerName = cfg.tile_provider_name || '';
+      let providerOpts = {};
       if (providerEnabled && cfg.tile_provider_options) {
         try { providerOpts = JSON.parse(cfg.tile_provider_options); }
         // eslint-disable-next-line no-empty
-        catch {}
+        catch { }
       }
 
       const gestureEnabled = !!cfg.gesture_handling_enabled;
 
-      const locateEnabled     = !!cfg.locate_enabled;
-      const locateFollow      = cfg.locate_follow !== undefined
-                                  ? !!cfg.locate_follow : true;
-      const locateKeepZoom    = !!cfg.locate_keep_zoom;
-      const locateFlyTo       = !!cfg.locate_fly_to;
+      const locateEnabled = !!cfg.locate_enabled;
+      const locateFollow = cfg.locate_follow !== undefined
+        ? !!cfg.locate_follow : true;
+      const locateKeepZoom = !!cfg.locate_keep_zoom;
+      const locateFlyTo = !!cfg.locate_fly_to;
       const locateShowCompass = cfg.locate_show_compass !== undefined
-                                  ? !!cfg.locate_show_compass : true;
-      const locatePosition    = cfg.locate_position || 'topleft';
+        ? !!cfg.locate_show_compass : true;
+      const locatePosition = cfg.locate_position || 'topleft';
 
       const locateOpts = {
         position: locatePosition,
@@ -296,15 +284,14 @@ function mapEditView(fallbackType = '') {
 <div class="${cls}">
   <div id="${mapId}" class="border rounded" style="height:${mapHeight}px;"></div>
   <input type="hidden" id="${inputId}" name="${fieldName}" value="${canonical}">
-  ${
-    wantZ
-      ? `<div class="mt-1">
+  ${wantZ
+          ? `<div class="mt-1">
            <label for="${zId}" class="form-label mb-0">Z&nbsp;value</label>
            <input type="number" id="${zId}" class="form-control form-control-sm"
                   step="any" value="${initialZ}">
          </div>`
-      : ''
-  }
+          : ''
+        }
 </div>
 
 <script>

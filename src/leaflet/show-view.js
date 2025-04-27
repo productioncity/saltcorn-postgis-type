@@ -22,22 +22,11 @@ const {
   LEAFLET_PROVIDERS,
   LEAFLET_GESTURE,
   LEAFLET_LOCATE,
+  PROVIDERS
 } = require('../constants');
 
 const { wktToGeoJSON } = require('../utils/geometry');
 const dbg = require('../utils/debug');
-
-/* ───────────────────────── Provider list (short) ─────────────────── */
-const PROVIDERS = Object.freeze([
-  'OpenStreetMap.Mapnik',
-  'CartoDB.Positron',
-  'CartoDB.DarkMatter',
-  'Stamen.Toner',
-  'Esri.WorldStreetMap',
-  'Esri.WorldImagery',
-  'HikeBike.HikeBike',
-  'OpenTopoMap',
-]);
 
 /* ────────────────────────── helpers ────────────────────────── */
 
@@ -64,7 +53,7 @@ function resolveValue(args) {
   for (const a of args) {
     if (typeof a === 'string' && looksLikeGeom(a)) return a;
     if (a && typeof a === 'object' && typeof a.value === 'string' &&
-        looksLikeGeom(a.value)) return a.value;
+      looksLikeGeom(a.value)) return a.value;
   }
   for (const a of args) {
     if (a && typeof a === 'object') {
@@ -85,7 +74,7 @@ function resolveValue(args) {
 function resolveAttrs(args) {
   for (const a of args) {
     if (a && typeof a === 'object' && 'attributes' in a &&
-        typeof a.attributes === 'object') {
+      typeof a.attributes === 'object') {
       // @ts-ignore runtime
       return a.attributes;
     }
@@ -219,7 +208,7 @@ const CONFIG_FIELDS = [
 
 function showView() {
   return {
-    name:   'show',
+    name: 'show',
     isEdit: false,
     description:
       'Read-only Leaflet map with per-instance provider, gesture and locate ' +
@@ -230,31 +219,31 @@ function showView() {
       dbg.debug('showView.run() invoked');
 
       /* -------- 1. Geometry & attribute extraction ---------------- */
-      const wkt        = resolveValue(args);
+      const wkt = resolveValue(args);
       const fieldAttrs = resolveAttrs(args);
-      const cfg        = { ...fieldAttrs, ...resolveConfig(args) };
+      const cfg = { ...fieldAttrs, ...resolveConfig(args) };
 
       const gj = wkt ? wktToGeoJSON(wkt) : undefined;
 
       /* Leaflet add-on flags (defaults OFF) ----------------------- */
       const providerEnabled = !!cfg.tile_provider_enabled;
-      const providerName    = cfg.tile_provider_name || '';
-      let   providerOpts    = {};
+      const providerName = cfg.tile_provider_name || '';
+      let providerOpts = {};
       if (providerEnabled && cfg.tile_provider_options) {
         try { providerOpts = JSON.parse(cfg.tile_provider_options); }
         // eslint-disable-next-line no-empty
-        catch {}
+        catch { }
       }
       const gestureEnabled = !!cfg.gesture_handling_enabled;
 
-      const locateEnabled     = !!cfg.locate_enabled;
-      const locateFollow      = cfg.locate_follow !== undefined
-                                  ? !!cfg.locate_follow : true;
-      const locateKeepZoom    = !!cfg.locate_keep_zoom;
-      const locateFlyTo       = !!cfg.locate_fly_to;
+      const locateEnabled = !!cfg.locate_enabled;
+      const locateFollow = cfg.locate_follow !== undefined
+        ? !!cfg.locate_follow : true;
+      const locateKeepZoom = !!cfg.locate_keep_zoom;
+      const locateFlyTo = !!cfg.locate_fly_to;
       const locateShowCompass = cfg.locate_show_compass !== undefined
-                                  ? !!cfg.locate_show_compass : true;
-      const locatePosition    = cfg.locate_position || 'topleft';
+        ? !!cfg.locate_show_compass : true;
+      const locatePosition = cfg.locate_position || 'topleft';
 
       const locateOpts = {
         position: locatePosition,
