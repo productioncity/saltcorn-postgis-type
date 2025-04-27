@@ -1,12 +1,19 @@
 /**
  * map-edit-view.js
  * -----------------------------------------------------------------------------
- * Interactive Leaflet editor that outputs canonical EWKT **and** now supports
- * the optional Leaflet-providers, leaflet-gesture-handling and
- * leaflet-locate-control add-ons.  Loading is completely dynamic – assets are
- * fetched **only** when enabled via the field’s attributes.
+ * Interactive Leaflet editor that outputs canonical EWKT **and** now exposes
+ * the same rich configuration surface available in the “composite_map” view –
+ * including tile-provider selection, gesture-handling and “locate me”
+ * controls.  All options are set per-field-view instance inside Saltcorn’s
+ * view-builder UI.
  *
  * Author:  Troy Kelly <troy@team.production.city>
+ * v7.0 – 27-Apr-2025
+ *   • Added `configFields` so developers can tweak rendering behaviour without
+ *     touching the underlying column attributes.
+ *   • Runtime now merges:  field attributes  ←  view-config  (← wins)
+ *   • Custom map height supported.
+ *
  * Licence: CC0-1.0
  */
 
@@ -28,9 +35,24 @@ const {
   toWkt,
 } = require('../utils/geometry');
 
+const dbg = require('../utils/debug');
+
 const DRAW_JS  = 'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
 const DRAW_CSS = 'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css';
 const WELLKNOWN_JS = 'https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
+
+/* ───────────────────────────── Provider list ────────────────────────
+ * A trimmed list from leaflet-providers for UI convenience.            */
+const PROVIDERS = Object.freeze([
+  'OpenStreetMap.Mapnik',
+  'CartoDB.Positron',
+  'CartoDB.DarkMatter',
+  'Stamen.Toner',
+  'Esri.WorldStreetMap',
+  'Esri.WorldImagery',
+  'HikeBike.HikeBike',
+  'OpenTopoMap',
+]);
 
 /* ────────────────────────── Helper functions ─────────────────────── */
 
@@ -63,6 +85,28 @@ function unpackArgs(args) {
 }
 
 /**
+ * Extract field-view configuration object (per-instance settings).
+ *
+ * @param {IArguments} args
+ * @returns {Record<string, unknown>}
+ */
+function resolveConfig(args) {
+  for (const a of args) {
+    if (
+      a &&
+      typeof a === 'object' &&
+      ('tile_provider_enabled' in a ||
+        'gesture_handling_enabled' in a ||
+        'locate_enabled' in a ||
+        'map_height' in a)
+    ) {
+      return a;
+    }
+  }
+  return {};
+}
+
+/**
  * Safe JSON → JS string helper (single escape < to avoid HTML parse issues).
  *
  * @param {unknown} v
@@ -72,6 +116,102 @@ function js(v) {
   const safe = v === undefined ? null : v;
   return JSON.stringify(safe).replace(/</g, '\\u003c');
 }
+
+/* ───────────────────────────── Config UI ──────────────────────────── */
+
+/**
+ * Shared Leaflet config fields (mirrors composite_map).
+ *
+ * @type {import('@saltcorn/types').TypeAttribute[]}
+ */
+const CONFIG_FIELDS = [
+  /* --- Rendering --- */
+  {
+    name: 'map_height',
+    label: 'Map height (px)',
+    type: 'Integer',
+    default: 300,
+    attributes: { min: 100 },
+  },
+
+  /* --- Providers --- */
+  {
+    name: 'tile_provider_enabled',
+    label: 'Enable Leaflet-providers basemap',
+    type: 'Bool',
+    default: false,
+  },
+  {
+    name: 'tile_provider_name',
+    label: 'Provider key',
+    type: 'String',
+    showIf: { tile_provider_enabled: true },
+    attributes: { options: PROVIDERS },
+  },
+  {
+    name: 'tile_provider_options',
+    label: 'Provider options (JSON)',
+    sublabel: 'Raw JSON passed to the provider – e.g. {"apikey":"…"}',
+    type: 'String',
+    fieldview: 'textarea',
+    attributes: { rows: 3 },
+    showIf: { tile_provider_enabled: true },
+  },
+
+  /* --- Gesture handling --- */
+  {
+    name: 'gesture_handling_enabled',
+    label: 'Enable touch gesture handling',
+    type: 'Bool',
+    default: false,
+  },
+
+  /* --- Locate control --- */
+  {
+    name: 'locate_enabled',
+    label: 'Enable “Locate me” control',
+    type: 'Bool',
+    default: false,
+  },
+  {
+    name: 'locate_position',
+    label: 'Locate control position',
+    type: 'String',
+    default: 'topleft',
+    showIf: { locate_enabled: true },
+    attributes: {
+      options: ['topleft', 'topright', 'bottomleft', 'bottomright'],
+    },
+  },
+  {
+    name: 'locate_follow',
+    label: 'Auto-follow user position',
+    type: 'Bool',
+    default: true,
+    showIf: { locate_enabled: true },
+  },
+  {
+    name: 'locate_keep_zoom',
+    label: 'Keep current zoom level',
+    type: 'Bool',
+    default: false,
+    showIf: { locate_enabled: true },
+  },
+  {
+    name: 'locate_fly_to',
+    label: 'Smooth fly-to animation',
+    type: 'Bool',
+    default: false,
+    showIf: { locate_enabled: true },
+  },
+  {
+    name: 'locate_show_compass',
+    label: 'Show compass bearing',
+    type: 'Bool',
+    default: true,
+    showIf: { locate_enabled: true },
+  },
+];
 
 /* ───────────────────────────── Factory ────────────────────────────── */
 
@@ -86,50 +226,56 @@ function mapEditView(fallbackType = '') {
     name: 'edit',
     isEdit: true,
     description:
-      'Interactive Leaflet editor that respects SRID & dimensionality and ' +
-      'optionally adds providers, gesture handling and locate control.',
+      'Interactive Leaflet editor with per-instance provider, gesture and ' +
+      'locate configuration.',
+    configFields: CONFIG_FIELDS,
 
     /* eslint-disable max-lines-per-function */
     run(/* dynamic – preserves Saltcorn’s variable signature */) {
-      /* -------- 1. Parameters & derived IDs ------------------------ */
-      const { name: fieldName, value: current, attrs = {}, cls = '' } =
+      dbg.debug('mapEditView.run() invoked');
+
+      /* -------- 1. Parameters & derived IDs ---------------------- */
+      const { name: fieldName, value: current, attrs: fieldAttrs = {}, cls = '' } =
         unpackArgs(arguments);
 
+      const viewCfg = resolveConfig(arguments);
+      const cfg = { ...fieldAttrs, ...viewCfg }; // view config wins
+
       const canonical   = toWkt(current) || String(current ?? '');
-      const expectType  = String((attrs.subtype ?? fallbackType)).toLowerCase();
-      const sridVal     = Number.isFinite(Number(attrs.srid))
-                            ? Number(attrs.srid)
+      const expectType  = String((cfg.subtype ?? fallbackType)).toLowerCase();
+      const sridVal     = Number.isFinite(Number(cfg.srid))
+                            ? Number(cfg.srid)
                             : 4326;
 
       const mapId   = `map_${Math.random().toString(36).slice(2)}`;
       const inputId = `inp_${mapId}`;
 
-      /* Z-dimension helpers ---------------------------------------- */
-      const dimAttr = String(attrs.dim ?? '').toUpperCase();
+      /* Z-dimension helpers -------------------------------------- */
+      const dimAttr = String(cfg.dim ?? '').toUpperCase();
       const wantZ   = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(canonical);
       const initialZ = wantZ ? extractFirstZ(canonical) : 0;
       const zId      = wantZ ? `z_${mapId}` : null;
 
-      /* Leaflet add-on flags (all default OFF) --------------------- */
-      const providerEnabled   = !!attrs.tile_provider_enabled;
-      const providerName      = attrs.tile_provider_name || '';
-      let   providerOpts      = {};
-      if (providerEnabled && attrs.tile_provider_options) {
-        try { providerOpts = JSON.parse(attrs.tile_provider_options); }
+      /* --- Leaflet add-ons -------------------------------------- */
+      const providerEnabled = !!cfg.tile_provider_enabled;
+      const providerName    = cfg.tile_provider_name || '';
+      let   providerOpts    = {};
+      if (providerEnabled && cfg.tile_provider_options) {
+        try { providerOpts = JSON.parse(cfg.tile_provider_options); }
         // eslint-disable-next-line no-empty
         catch {}
       }
 
-      const gestureEnabled = !!attrs.gesture_handling_enabled;
+      const gestureEnabled = !!cfg.gesture_handling_enabled;
 
-      const locateEnabled      = !!attrs.locate_enabled;
-      const locateFollow       = attrs.locate_follow !== undefined
-                                   ? !!attrs.locate_follow : true;
-      const locateKeepZoom     = !!attrs.locate_keep_zoom;
-      const locateFlyTo        = !!attrs.locate_fly_to;
-      const locateShowCompass  = attrs.locate_show_compass !== undefined
-                                   ? !!attrs.locate_show_compass : true;
-      const locatePosition     = attrs.locate_position || 'topleft';
+      const locateEnabled     = !!cfg.locate_enabled;
+      const locateFollow      = cfg.locate_follow !== undefined
+                                  ? !!cfg.locate_follow : true;
+      const locateKeepZoom    = !!cfg.locate_keep_zoom;
+      const locateFlyTo       = !!cfg.locate_fly_to;
+      const locateShowCompass = cfg.locate_show_compass !== undefined
+                                  ? !!cfg.locate_show_compass : true;
+      const locatePosition    = cfg.locate_position || 'topleft';
 
       const locateOpts = {
         position: locatePosition,
@@ -139,14 +285,16 @@ function mapEditView(fallbackType = '') {
         flyTo: locateFlyTo,
       };
 
-      /* -------- 2. Server-side GeoJSON (for initial display) ------- */
+      /* -------- 2. Server-side GeoJSON (for initial display) ----- */
       const initGeoJSON = wktToGeoJSON(canonical);
       const { lat, lng, zoom } = DEFAULT_CENTER;
 
-      /* -------- 3. HTML / JS payload ------------------------------ */
+      const mapHeight = Number(cfg.map_height) || 300;
+
+      /* -------- 3. HTML / JS payload ---------------------------- */
       return `
 <div class="${cls}">
-  <div id="${mapId}" class="border rounded" style="height:300px;"></div>
+  <div id="${mapId}" class="border rounded" style="height:${mapHeight}px;"></div>
   <input type="hidden" id="${inputId}" name="${fieldName}" value="${canonical}">
   ${
     wantZ
@@ -170,6 +318,7 @@ function mapEditView(fallbackType = '') {
     providerOpts:${js(providerOpts)},
     gestureEnabled:${js(gestureEnabled)},
     locateEnabled:${js(locateEnabled)}, locateOpts:${js(locateOpts)},
+    center:{lat:${lat}, lng:${lng}, zoom:${zoom}},
     assets:{
       leaflet:{css:${js(LEAFLET.css)}, js:${js(LEAFLET.js)}},
       draw:{css:${js(DRAW_CSS)}, js:${js(DRAW_JS)}},
@@ -177,8 +326,7 @@ function mapEditView(fallbackType = '') {
       provider:${js(LEAFLET_PROVIDERS.js)},
       gesture:${js(LEAFLET_GESTURE.js)},
       locate:{css:${js(LEAFLET_LOCATE.css)}, js:${js(LEAFLET_LOCATE.js)}},
-    },
-    center:{lat:${lat}, lng:${lng}, zoom:${zoom}}
+    }
   };
 
   /* ---------- 1. Dynamic loader helpers ---------- */
@@ -194,14 +342,13 @@ function mapEditView(fallbackType = '') {
 
   /* ---------- 2. Bootstrap dependencies ---------- */
   (async function(){
-    const a=CFG.assets;
-    await loadCss(a.leaflet.css); await loadCss(a.draw.css);
-    await loadJs(a.leaflet.js);   await loadJs(a.draw.js);
-    await loadJs(a.wk);
+    await loadCss(CFG.assets.leaflet.css); await loadCss(CFG.assets.draw.css);
+    await loadJs(CFG.assets.leaflet.js);   await loadJs(CFG.assets.draw.js);
+    await loadJs(CFG.assets.wk);
 
-    if(CFG.providerEnabled) await loadJs(a.provider);
-    if(CFG.gestureEnabled)  await loadJs(a.gesture);
-    if(CFG.locateEnabled){ await loadCss(a.locate.css); await loadJs(a.locate.js); }
+    if(CFG.providerEnabled) await loadJs(CFG.assets.provider);
+    if(CFG.gestureEnabled)  await loadJs(CFG.assets.gesture);
+    if(CFG.locateEnabled){ await loadCss(CFG.assets.locate.css); await loadJs(CFG.assets.locate.js); }
 
     initMap();
   })();

@@ -1,11 +1,15 @@
 /**
  * point-edit-view.js
  * -----------------------------------------------------------------------------
- * Draggable marker editor for **Point** fields.  Now uses the shared dynamic
- * loader so it can optionally pull-in Leaflet-providers, gesture-handling and
- * locate-control *per column* according to the field attributes.
+ * Draggable marker editor for **Point** fields with full map configurability –
+ * developers can now pick a Leaflet-providers basemap, enable gesture-handling
+ * and add a geolocation button directly from the view-builder UI.
  *
  * Author:  Troy Kelly <troy@team.production.city>
+ * v5.0 – 27-Apr-2025
+ *   • Added `configFields` plus runtime override logic (view config wins over
+ *     column attributes).
+ *
  * Licence: CC0-1.0
  */
 
@@ -20,18 +24,149 @@ const {
   LEAFLET_LOCATE,
 } = require('../constants');
 
+const dbg = require('../utils/debug');
+
+/* Short provider list for UI convenience */
+const PROVIDERS = Object.freeze([
+  'OpenStreetMap.Mapnik',
+  'CartoDB.Positron',
+  'CartoDB.DarkMatter',
+  'Stamen.Toner',
+  'Esri.WorldStreetMap',
+  'Esri.WorldImagery',
+  'HikeBike.HikeBike',
+  'OpenTopoMap',
+]);
+
+/* ───────────────────────── Config UI ───────────────────────── */
+
 /**
- * Build the field-view object.
+ * Shared config fields (mirrors composite_map).
  *
- * @param {string} fieldName
- * @returns {import('@saltcorn/types').FieldView}
+ * @type {import('@saltcorn/types').TypeAttribute[]}
  */
+const CONFIG_FIELDS = [
+  {
+    name: 'map_height',
+    label: 'Map height (px)',
+    type: 'Integer',
+    default: 220,
+    attributes: { min: 100 },
+  },
+  {
+    name: 'tile_provider_enabled',
+    label: 'Enable Leaflet-providers basemap',
+    type: 'Bool',
+    default: false,
+  },
+  {
+    name: 'tile_provider_name',
+    label: 'Provider key',
+    type: 'String',
+    showIf: { tile_provider_enabled: true },
+    attributes: { options: PROVIDERS },
+  },
+  {
+    name: 'tile_provider_options',
+    label: 'Provider options (JSON)',
+    sublabel: 'Raw JSON passed to the provider – e.g. {"apikey":"…"}',
+    type: 'String',
+    fieldview: 'textarea',
+    attributes: { rows: 3 },
+    showIf: { tile_provider_enabled: true },
+  },
+  {
+    name: 'gesture_handling_enabled',
+    label: 'Enable touch gesture handling',
+    type: 'Bool',
+    default: false,
+  },
+  {
+    name: 'locate_enabled',
+    label: 'Enable “Locate me” control',
+    type: 'Bool',
+    default: false,
+  },
+  {
+    name: 'locate_position',
+    label: 'Locate control position',
+    type: 'String',
+    default: 'topleft',
+    showIf: { locate_enabled: true },
+    attributes: {
+      options: ['topleft', 'topright', 'bottomleft', 'bottomright'],
+    },
+  },
+  {
+    name: 'locate_follow',
+    label: 'Auto-follow user position',
+    type: 'Bool',
+    default: true,
+    showIf: { locate_enabled: true },
+  },
+  {
+    name: 'locate_keep_zoom',
+    label: 'Keep current zoom level',
+    type: 'Bool',
+    default: false,
+    showIf: { locate_enabled: true },
+  },
+  {
+    name: 'locate_fly_to',
+    label: 'Smooth fly-to animation',
+    type: 'Bool',
+    default: false,
+    showIf: { locate_enabled: true },
+  },
+  {
+    name: 'locate_show_compass',
+    label: 'Show compass bearing',
+    type: 'Bool',
+    default: true,
+    showIf: { locate_enabled: true },
+  },
+];
+
+/* ───────────────────────── Helper ────────────────────────── */
+
+/**
+ * Retrieve per-instance view configuration object.
+ *
+ * @param {IArguments} args
+ * @returns {Record<string, unknown>}
+ */
+function resolveConfig(args) {
+  for (const a of args) {
+    if (
+      a &&
+      typeof a === 'object' &&
+      ('tile_provider_enabled' in a ||
+        'gesture_handling_enabled' in a ||
+        'locate_enabled' in a ||
+        'map_height' in a)
+    ) {
+      return a;
+    }
+  }
+  return {};
+}
+
+/* ───────────────────────── Field-view ───────────────────────── */
+
 function leafletPointEditView(fieldName) {
   return {
     isEdit: true,
     description:
-      'Leaflet draggable marker editor with optional provider, gesture and locate add-ons.',
+      'Leaflet draggable marker editor with configurable provider, gesture ' +
+      'and locate controls.',
+    configFields: CONFIG_FIELDS,
+
     run(nm, value, attrs = {}, cls) {
+      dbg.debug('leafletPointEditView.run() invoked');
+
+      const viewCfg = resolveConfig(arguments);
+      const cfg = { ...attrs, ...viewCfg };
+
       /* ------------------------------------------------------------------ */
       /* 1. DOM IDs & initial position                                      */
       /* ------------------------------------------------------------------ */
@@ -41,26 +176,26 @@ function leafletPointEditView(fieldName) {
       const ll    = wktToLonLat(value) || [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat];
 
       /* ------------------------------------------------------------------ */
-      /* 2. Leaflet add-on flags (from field attributes)                    */
+      /* 2. Leaflet add-ons (from combined cfg)                             */
       /* ------------------------------------------------------------------ */
-      const providerEnabled = !!attrs.tile_provider_enabled;
-      const providerName    = attrs.tile_provider_name || '';
+      const providerEnabled = !!cfg.tile_provider_enabled;
+      const providerName    = cfg.tile_provider_name || '';
       let   providerOpts    = {};
-      if (providerEnabled && attrs.tile_provider_options) {
-        try { providerOpts = JSON.parse(attrs.tile_provider_options); }
+      if (providerEnabled && cfg.tile_provider_options) {
+        try { providerOpts = JSON.parse(cfg.tile_provider_options); }
         // eslint-disable-next-line no-empty
         catch {}
       }
-      const gestureEnabled = !!attrs.gesture_handling_enabled;
+      const gestureEnabled = !!cfg.gesture_handling_enabled;
 
-      const locateEnabled     = !!attrs.locate_enabled;
-      const locateFollow      = attrs.locate_follow !== undefined
-                                  ? !!attrs.locate_follow : true;
-      const locateKeepZoom    = !!attrs.locate_keep_zoom;
-      const locateFlyTo       = !!attrs.locate_fly_to;
-      const locateShowCompass = attrs.locate_show_compass !== undefined
-                                  ? !!attrs.locate_show_compass : true;
-      const locatePosition    = attrs.locate_position || 'topleft';
+      const locateEnabled     = !!cfg.locate_enabled;
+      const locateFollow      = cfg.locate_follow !== undefined
+                                  ? !!cfg.locate_follow : true;
+      const locateKeepZoom    = !!cfg.locate_keep_zoom;
+      const locateFlyTo       = !!cfg.locate_fly_to;
+      const locateShowCompass = cfg.locate_show_compass !== undefined
+                                  ? !!cfg.locate_show_compass : true;
+      const locatePosition    = cfg.locate_position || 'topleft';
 
       const locateOpts = {
         position: locatePosition,
@@ -70,12 +205,14 @@ function leafletPointEditView(fieldName) {
         flyTo: locateFlyTo,
       };
 
+      const mapHeight = Number(cfg.map_height) || 220;
+
       /* ------------------------------------------------------------------ */
       /* 3. HTML + JS payload                                               */
       /* ------------------------------------------------------------------ */
       return `
 <div class="${cls || ''}">
-  <div id="${id}" class="border rounded" style="height:220px;"></div>
+  <div id="${id}" class="border rounded" style="height:${mapHeight}px;"></div>
   <input type="hidden" id="${input}" name="${nm}" value="${value || ''}">
 </div>
 

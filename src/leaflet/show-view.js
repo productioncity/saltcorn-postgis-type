@@ -1,10 +1,16 @@
 /**
  * show-view.js
- * ----------------------------------------------------------------------------
- * Read-only Leaflet viewer with support for the optional add-ons
- * (Leaflet-providers, gesture-handling, locate-control) configured per column.
+ * -----------------------------------------------------------------------------
+ * Read-only Leaflet viewer with per-instance configuration options matching
+ * those in the composite map and edit field-views – allowing developers to set
+ * a custom tile provider, gesture-handling and geolocation controls directly
+ * from the view-builder UI.
  *
  * Author:  Troy Kelly <troy@team.production.city>
+ * v6.0 – 27-Apr-2025
+ *   • Added `configFields` and runtime merging of field attributes with
+ *     per-view configuration (view settings win).
+ *
  * Licence: CC0-1.0
  */
 
@@ -19,6 +25,19 @@ const {
 } = require('../constants');
 
 const { wktToGeoJSON } = require('../utils/geometry');
+const dbg = require('../utils/debug');
+
+/* ───────────────────────── Provider list (short) ─────────────────── */
+const PROVIDERS = Object.freeze([
+  'OpenStreetMap.Mapnik',
+  'CartoDB.Positron',
+  'CartoDB.DarkMatter',
+  'Stamen.Toner',
+  'Esri.WorldStreetMap',
+  'Esri.WorldImagery',
+  'HikeBike.HikeBike',
+  'OpenTopoMap',
+]);
 
 /* ────────────────────────── helpers ────────────────────────── */
 
@@ -30,8 +49,8 @@ const { wktToGeoJSON } = require('../utils/geometry');
  */
 function looksLikeGeom(s) {
   return (
-    /^(SRID=\d+;)?[A-Z]/.test(s) ||        // WKT / EWKT
-    /^[0-9A-Fa-f]{16,}$/.test(s)           // hex-WKB
+    /^(SRID=\d+;)?[A-Z]/.test(s) || // WKT / EWKT
+    /^[0-9A-Fa-f]{16,}$/.test(s)   // hex-WKB
   );
 }
 
@@ -75,6 +94,28 @@ function resolveAttrs(args) {
 }
 
 /**
+ * Extract per-instance view configuration (view-builder settings).
+ *
+ * @param {unknown[]} args
+ * @returns {Record<string, unknown>}
+ */
+function resolveConfig(args) {
+  for (const a of args) {
+    if (
+      a &&
+      typeof a === 'object' &&
+      ('tile_provider_enabled' in a ||
+        'gesture_handling_enabled' in a ||
+        'locate_enabled' in a ||
+        'map_height' in a)
+    ) {
+      return a;
+    }
+  }
+  return {};
+}
+
+/**
  * JSON → safe inline JS literal (single-escape <).
  *
  * @param {unknown} v
@@ -85,38 +126,135 @@ function js(v) {
   return JSON.stringify(safe).replace(/</g, '\\u003c');
 }
 
+/* ─────────────────────────── Config UI ──────────────────────────── */
+
+/**
+ * Shared Leaflet config fields (mirrors composite_map).
+ *
+ * @type {import('@saltcorn/types').TypeAttribute[]}
+ */
+const CONFIG_FIELDS = [
+  {
+    name: 'map_height',
+    label: 'Map height (px)',
+    type: 'Integer',
+    default: 250,
+    attributes: { min: 100 },
+  },
+  {
+    name: 'tile_provider_enabled',
+    label: 'Enable Leaflet-providers basemap',
+    type: 'Bool',
+    default: false,
+  },
+  {
+    name: 'tile_provider_name',
+    label: 'Provider key',
+    type: 'String',
+    showIf: { tile_provider_enabled: true },
+    attributes: { options: PROVIDERS },
+  },
+  {
+    name: 'tile_provider_options',
+    label: 'Provider options (JSON)',
+    sublabel: 'Raw JSON passed to the provider – e.g. {"apikey":"…"}',
+    type: 'String',
+    fieldview: 'textarea',
+    attributes: { rows: 3 },
+    showIf: { tile_provider_enabled: true },
+  },
+  {
+    name: 'gesture_handling_enabled',
+    label: 'Enable touch gesture handling',
+    type: 'Bool',
+    default: false,
+  },
+  {
+    name: 'locate_enabled',
+    label: 'Enable “Locate me” control',
+    type: 'Bool',
+    default: false,
+  },
+  {
+    name: 'locate_position',
+    label: 'Locate control position',
+    type: 'String',
+    default: 'topleft',
+    showIf: { locate_enabled: true },
+    attributes: {
+      options: ['topleft', 'topright', 'bottomleft', 'bottomright'],
+    },
+  },
+  {
+    name: 'locate_follow',
+    label: 'Auto-follow user position',
+    type: 'Bool',
+    default: true,
+    showIf: { locate_enabled: true },
+  },
+  {
+    name: 'locate_keep_zoom',
+    label: 'Keep current zoom level',
+    type: 'Bool',
+    default: false,
+    showIf: { locate_enabled: true },
+  },
+  {
+    name: 'locate_fly_to',
+    label: 'Smooth fly-to animation',
+    type: 'Bool',
+    default: false,
+    showIf: { locate_enabled: true },
+  },
+  {
+    name: 'locate_show_compass',
+    label: 'Show compass bearing',
+    type: 'Bool',
+    default: true,
+    showIf: { locate_enabled: true },
+  },
+];
+
 /* ────────────────────────── Field-view ───────────────────────── */
 
 function showView() {
   return {
     name:   'show',
     isEdit: false,
+    description:
+      'Read-only Leaflet map with per-instance provider, gesture and locate ' +
+      'configuration.',
+    configFields: CONFIG_FIELDS,
+
     run(...args) {
+      dbg.debug('showView.run() invoked');
+
       /* -------- 1. Geometry & attribute extraction ---------------- */
-      const wkt   = resolveValue(args);
-      const attrs = resolveAttrs(args);
+      const wkt        = resolveValue(args);
+      const fieldAttrs = resolveAttrs(args);
+      const cfg        = { ...fieldAttrs, ...resolveConfig(args) };
 
       const gj = wkt ? wktToGeoJSON(wkt) : undefined;
 
       /* Leaflet add-on flags (defaults OFF) ----------------------- */
-      const providerEnabled = !!attrs.tile_provider_enabled;
-      const providerName    = attrs.tile_provider_name || '';
+      const providerEnabled = !!cfg.tile_provider_enabled;
+      const providerName    = cfg.tile_provider_name || '';
       let   providerOpts    = {};
-      if (providerEnabled && attrs.tile_provider_options) {
-        try { providerOpts = JSON.parse(attrs.tile_provider_options); }
+      if (providerEnabled && cfg.tile_provider_options) {
+        try { providerOpts = JSON.parse(cfg.tile_provider_options); }
         // eslint-disable-next-line no-empty
         catch {}
       }
-      const gestureEnabled = !!attrs.gesture_handling_enabled;
+      const gestureEnabled = !!cfg.gesture_handling_enabled;
 
-      const locateEnabled     = !!attrs.locate_enabled;
-      const locateFollow      = attrs.locate_follow !== undefined
-                                  ? !!attrs.locate_follow : true;
-      const locateKeepZoom    = !!attrs.locate_keep_zoom;
-      const locateFlyTo       = !!attrs.locate_fly_to;
-      const locateShowCompass = attrs.locate_show_compass !== undefined
-                                  ? !!attrs.locate_show_compass : true;
-      const locatePosition    = attrs.locate_position || 'topleft';
+      const locateEnabled     = !!cfg.locate_enabled;
+      const locateFollow      = cfg.locate_follow !== undefined
+                                  ? !!cfg.locate_follow : true;
+      const locateKeepZoom    = !!cfg.locate_keep_zoom;
+      const locateFlyTo       = !!cfg.locate_fly_to;
+      const locateShowCompass = cfg.locate_show_compass !== undefined
+                                  ? !!cfg.locate_show_compass : true;
+      const locatePosition    = cfg.locate_position || 'topleft';
 
       const locateOpts = {
         position: locatePosition,
@@ -129,9 +267,10 @@ function showView() {
       /* -------- 2. HTML / JS ------------------------------------- */
       const mapId = `show_${Math.random().toString(36).slice(2)}`;
       const { lat, lng, zoom } = DEFAULT_CENTER;
+      const mapHeight = Number(cfg.map_height) || 250;
 
       return `
-<div id="${mapId}" style="height:250px;" class="border"></div>
+<div id="${mapId}" style="height:${mapHeight}px;" class="border"></div>
 <script>
 (function(){
   const CFG={
