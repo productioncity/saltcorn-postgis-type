@@ -1,62 +1,69 @@
 /**
  * map-edit-view.js
  * -----------------------------------------------------------------------------
- * Leaflet **edit** field‑view that outputs EWKT guaranteed to match the
- * column’s SQL definition (type + SRID + dimensionality).
+ * Interactive Leaflet editor that outputs canonical EWKT **and** now supports
+ * the optional Leaflet-providers, leaflet-gesture-handling and
+ * leaflet-locate-control add-ons.  Loading is completely dynamic – assets are
+ * fetched **only** when enabled via the field’s attributes.
  *
- * Author:  Troy Kelly <troy@team.production.city>
- * Licence: CC0‑1.0
+ * Author:  Troy Kelly <troy@team.production.city>
+ * Licence: CC0-1.0
  */
 
 'use strict';
 
 /* ───────────────────────────── Imports ────────────────────────────── */
 
-const { DEFAULT_CENTER, LEAFLET } = require('../constants');
-const { wktToGeoJSON, extractFirstZ, toWkt } = require('../utils/geometry');
+const {
+  DEFAULT_CENTER,
+  LEAFLET,
+  LEAFLET_PROVIDERS,
+  LEAFLET_GESTURE,
+  LEAFLET_LOCATE,
+} = require('../constants');
 
-const DRAW_JS =
-  'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
-const DRAW_CSS =
-  'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css';
-const WELLKNOWN_JS =
-  'https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
+const {
+  wktToGeoJSON,
+  extractFirstZ,
+  toWkt,
+} = require('../utils/geometry');
 
-/* ────────────────────────── Helper functions ─────────────────────── */
+const DRAW_JS  = 'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.min.js';
+const DRAW_CSS = 'https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css';
+const WELLKNOWN_JS = 'https://cdn.jsdelivr.net/npm/wellknown@0.5.0/wellknown.min.js';
+
+/* ────────────────────────── Helper functions ─────────────────────── */
 
 /**
- * Normalise Saltcorn’s dual call signature into a single object:
- *   • (fieldName, value, attrs?, classes?)  
- *   • (fieldObj,  value, attrs?, classes?)
+ * Normalise Saltcorn’s dual call signature into a single object.
  *
  * @param {IArguments} args
- * @returns {{name:string,value:string,attrs?:object,cls?:string}}
  */
 function unpackArgs(args) {
   /** @type {string} */ let name = '';
   /** @type {string} */ let value = '';
-  /** @type {object} */ let attrs;
-  /** @type {string} */ let cls;
+  /** @type {Record<string, unknown>|undefined} */ let attrs;
+  /** @type {string|undefined} */ let cls;
 
   if (args[0] && typeof args[0] === 'object' && 'name' in args[0]) {
-    // Field‑object form
-    // @ts-ignore – runtime shape check
-    name = args[0].name;
+    // Field-object form
+    // @ts-ignore
+    name  = args[0].name;
     value = args[1] ?? '';
-    attrs = args[2];
-    cls = args[3];
+    attrs = args[0].attributes ?? {};
+    cls   = args[3];
   } else {
     // Primitive form
-    name = args[0] ?? '';
+    name  = args[0] ?? '';
     value = args[1] ?? '';
-    attrs = args[2];
-    cls = args[3];
+    attrs = args[2] ?? {};
+    cls   = args[3];
   }
   return { name, value: String(value ?? ''), attrs, cls };
 }
 
 /**
- * Single‑escape JS literal helper.
+ * Safe JSON → JS string helper (single escape < to avoid HTML parse issues).
  *
  * @param {unknown} v
  * @returns {string}
@@ -69,53 +76,74 @@ function js(v) {
 /* ───────────────────────────── Factory ────────────────────────────── */
 
 /**
- * Generate the edit field‑view for a specific Saltcorn type.
+ * Generate the edit field-view for a specific Saltcorn type.
  *
- * @param {string} fallbackType  Lower‑case type name used if attrs.subtype unset.
+ * @param {string} fallbackType Lower-case type name used when attrs.subtype unset.
  * @returns {import('@saltcorn/types').FieldView}
  */
 function mapEditView(fallbackType = '') {
   return {
     name: 'edit',
     isEdit: true,
-    description: 'Interactive Leaflet editor whose EWKT matches the column type.',
+    description:
+      'Interactive Leaflet editor that respects SRID & dimensionality and ' +
+      'optionally adds providers, gesture handling and locate control.',
 
     /* eslint-disable max-lines-per-function */
     run(/* dynamic – preserves Saltcorn’s variable signature */) {
-      /* ──────────────── 1. Parameters & IDs ────────────────────── */
+      /* -------- 1. Parameters & derived IDs ------------------------ */
       const { name: fieldName, value: current, attrs = {}, cls = '' } =
         unpackArgs(arguments);
 
-      /* Canonical WKT (covers WKT, EWKT, hex‑WKB, Buffer) */
-      const canonical = toWkt(current) || String(current ?? '');
+      const canonical   = toWkt(current) || String(current ?? '');
+      const expectType  = String((attrs.subtype ?? fallbackType)).toLowerCase();
+      const sridVal     = Number.isFinite(Number(attrs.srid))
+                            ? Number(attrs.srid)
+                            : 4326;
 
-      /* Concrete geometry type required by the column */
-      const expectType = String(
-        (attrs.subtype && `${attrs.subtype}`.toLowerCase()) || fallbackType,
-      ).toLowerCase();
-
-      /* SRID (falls back to WGS‑84) */
-      const sridVal =
-        attrs && Number.isFinite(Number(attrs.srid))
-          ? Number(attrs.srid)
-          : 4326;
-
-      const mapId = `map_${Math.random().toString(36).slice(2)}`;
+      const mapId   = `map_${Math.random().toString(36).slice(2)}`;
       const inputId = `inp_${mapId}`;
 
-      /* Z‑dimension helper */
-      const dimAttr = String(attrs?.dim ?? '').toUpperCase();
-      const wantZ =
-        dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(canonical);
+      /* Z-dimension helpers ---------------------------------------- */
+      const dimAttr = String(attrs.dim ?? '').toUpperCase();
+      const wantZ   = dimAttr.includes('Z') || /Z[^A-Za-z]*\(/i.test(canonical);
       const initialZ = wantZ ? extractFirstZ(canonical) : 0;
-      const zId = wantZ ? `z_${mapId}` : null;
+      const zId      = wantZ ? `z_${mapId}` : null;
 
-      /* Server‑side GeoJSON conversion – handles *everything*. */
+      /* Leaflet add-on flags (all default OFF) --------------------- */
+      const providerEnabled   = !!attrs.tile_provider_enabled;
+      const providerName      = attrs.tile_provider_name || '';
+      let   providerOpts      = {};
+      if (providerEnabled && attrs.tile_provider_options) {
+        try { providerOpts = JSON.parse(attrs.tile_provider_options); }
+        // eslint-disable-next-line no-empty
+        catch {}
+      }
+
+      const gestureEnabled = !!attrs.gesture_handling_enabled;
+
+      const locateEnabled      = !!attrs.locate_enabled;
+      const locateFollow       = attrs.locate_follow !== undefined
+                                   ? !!attrs.locate_follow : true;
+      const locateKeepZoom     = !!attrs.locate_keep_zoom;
+      const locateFlyTo        = !!attrs.locate_fly_to;
+      const locateShowCompass  = attrs.locate_show_compass !== undefined
+                                   ? !!attrs.locate_show_compass : true;
+      const locatePosition     = attrs.locate_position || 'topleft';
+
+      const locateOpts = {
+        position: locatePosition,
+        setView: locateFollow ? 'untilPanOrZoom' : 'once',
+        keepCurrentZoomLevel: locateKeepZoom,
+        showCompass: locateShowCompass,
+        flyTo: locateFlyTo,
+      };
+
+      /* -------- 2. Server-side GeoJSON (for initial display) ------- */
       const initGeoJSON = wktToGeoJSON(canonical);
-
       const { lat, lng, zoom } = DEFAULT_CENTER;
 
-      /* ──────────────── 2. Mark‑up payload ─────────────────────── */
+      /* -------- 3. HTML / JS payload ------------------------------ */
       return `
 <div class="${cls}">
   <div id="${mapId}" class="border rounded" style="height:300px;"></div>
@@ -124,9 +152,8 @@ function mapEditView(fallbackType = '') {
     wantZ
       ? `<div class="mt-1">
            <label for="${zId}" class="form-label mb-0">Z&nbsp;value</label>
-           <input type="number" id="${zId}"
-                  class="form-control form-control-sm" step="any"
-                  value="${initialZ}">
+           <input type="number" id="${zId}" class="form-control form-control-sm"
+                  step="any" value="${initialZ}">
          </div>`
       : ''
   }
@@ -134,72 +161,96 @@ function mapEditView(fallbackType = '') {
 
 <script>
 (function(){
-  const MAP_ID=${js(mapId)};
-  const INP_ID=${js(inputId)};
-  const GEOJSON=${js(initGeoJSON)};
-  const LEAF_CSS=${js(LEAFLET.css)};
-  const LEAF_JS=${js(LEAFLET.js)};
-  const DRAW_CSS=${js(DRAW_CSS)};
-  const DRAW_JS=${js(DRAW_JS)};
-  const WK_JS=${js(WELLKNOWN_JS)};
-  const WANT_Z=${wantZ};
-  const Z_ID=${js(zId)};
-  const SRID=${sridVal};
-  const EXPECT=${js(expectType)};
+  /* ---------- 0. Config → constants ---------- */
+  const CFG = {
+    mapId:${js(mapId)}, inputId:${js(inputId)}, zId:${js(zId)},
+    wantZ:${wantZ}, expect:${js(expectType)}, srid:${sridVal},
+    initGeo:${js(initGeoJSON)},
+    providerEnabled:${js(providerEnabled)}, providerName:${js(providerName)},
+    providerOpts:${js(providerOpts)},
+    gestureEnabled:${js(gestureEnabled)},
+    locateEnabled:${js(locateEnabled)}, locateOpts:${js(locateOpts)},
+    assets:{
+      leaflet:{css:${js(LEAFLET.css)}, js:${js(LEAFLET.js)}},
+      draw:{css:${js(DRAW_CSS)}, js:${js(DRAW_JS)}},
+      wk:${js(WELLKNOWN_JS)},
+      provider:${js(LEAFLET_PROVIDERS.js)},
+      gesture:${js(LEAFLET_GESTURE.js)},
+      locate:{css:${js(LEAFLET_LOCATE.css)}, js:${js(LEAFLET_LOCATE.js)}},
+    },
+    center:{lat:${lat}, lng:${lng}, zoom:${zoom}}
+  };
 
-  /* ---------- 0. Utility loaders ---------- */
-  function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
-  function haveJs(s){return !!(document._loadedScripts && document._loadedScripts[s]);}
-  function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
+  /* ---------- 1. Dynamic loader helpers ---------- */
+  function hasCss(h){return !!document.querySelector('link[href="'+h+'"]');}
+  function hasJs(s){ return !!(document._loadedScripts && document._loadedScripts[s]);}
+  function loadCss(h){return new Promise(r=>{if(hasCss(h))return r();
     const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;
     document.head.appendChild(l);});}
-  function loadJs(s){return new Promise(r=>{if(haveJs(s))return r();
+  function loadJs(s){return new Promise(r=>{if(hasJs(s))return r();
     const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){
       document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
     document.head.appendChild(sc);});}
 
+  /* ---------- 2. Bootstrap dependencies ---------- */
   (async function(){
-    await loadCss(LEAF_CSS); await loadCss(DRAW_CSS);
-    await loadJs(LEAF_JS);  await loadJs(DRAW_JS); await loadJs(WK_JS);
-    init();
+    const a=CFG.assets;
+    await loadCss(a.leaflet.css); await loadCss(a.draw.css);
+    await loadJs(a.leaflet.js);   await loadJs(a.draw.js);
+    await loadJs(a.wk);
+
+    if(CFG.providerEnabled) await loadJs(a.provider);
+    if(CFG.gestureEnabled)  await loadJs(a.gesture);
+    if(CFG.locateEnabled){ await loadCss(a.locate.css); await loadJs(a.locate.js); }
+
+    initMap();
   })();
 
-  /* ---------- 1. Init map once deps ready ---------- */
-  function init(){
-    const mapEl=document.getElementById(MAP_ID);
-    const hidden=document.getElementById(INP_ID);
-    if(!mapEl||!hidden||!window.L||!window.L.Draw)return;
+  /* ---------- 3. Map initialisation ------------------------------ */
+  function initMap(){
+    const mapEl=document.getElementById(CFG.mapId);
+    const hidden=document.getElementById(CFG.inputId);
+    if(!mapEl||!hidden||!window.L||!window.L.Draw) return;
 
-    const map=L.map(mapEl).setView([${lat},${lng}],${zoom});
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-      attribution:'&copy; OpenStreetMap contributors'
-    }).addTo(map);
+    const mapOpts = CFG.gestureEnabled ? { gestureHandling:true } : {};
+    const map=L.map(mapEl, mapOpts)
+               .setView([CFG.center.lat, CFG.center.lng], CFG.center.zoom);
 
+    /* Base layer --------------------------------------------------- */
+    let baseLayer;
+    if(CFG.providerEnabled && L.tileLayer.provider && CFG.providerName){
+      try{
+        baseLayer=L.tileLayer.provider(CFG.providerName, CFG.providerOpts).addTo(map);
+      }catch(e){ console.warn('Provider error', e); }
+    }
+    if(!baseLayer){
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+        attribution:'&copy; OpenStreetMap contributors'
+      }).addTo(map);
+    }
+
+    /* FeatureGroup + existing geometry ----------------------------- */
     const fg=new L.FeatureGroup().addTo(map);
-
-    /* ---------- 1.1 Load existing geometry ---------- */
-    if(GEOJSON){
-      const lyr=L.geoJSON(GEOJSON).addTo(fg);
+    if(CFG.initGeo){
+      const lyr=L.geoJSON(CFG.initGeo).addTo(fg);
       map.fitBounds(lyr.getBounds(),{maxZoom:14});
     }
 
-    /* ---------- 1.2 Draw toolbar ------------------- */
+    /* Draw toolbar ------------------------------------------------- */
     map.addControl(new L.Control.Draw({
       edit:{ featureGroup: fg },
       draw:{
-        polygon:true, polyline:true,
-        rectangle:false, circle:false,
-        marker:true, circlemarker:false
+        polygon:true, polyline:true, rectangle:false, circle:false,
+        marker:true,  circlemarker:false
       }
     }));
 
-    /* ---------- 1.3 Helpers ------------------------ */
+    /* Z helpers ---------------------------------------------------- */
     function currentZ(){
-      if(!WANT_Z) return undefined;
-      const zEl=document.getElementById(Z_ID);
+      if(!CFG.wantZ) return undefined;
+      const zEl=document.getElementById(CFG.zId);
       return zEl ? parseFloat(zEl.value||'0') : 0;
     }
-
     function addZ(coords,z){
       if(typeof coords[0]==='number'){
         if(coords.length===2)coords.push(z);else coords[2]=z;
@@ -207,55 +258,59 @@ function mapEditView(fallbackType = '') {
       }
       return coords.map(c=>addZ(c,z));
     }
-
     function withZ(geom){
-      if(!WANT_Z)return geom;
+      if(!CFG.wantZ) return geom;
       const z=currentZ();
       const g=JSON.parse(JSON.stringify(geom));
       if(g.type==='GeometryCollection'){
-        g.geometries=g.geometries.map(withZ);
-        return g;
+        g.geometries=g.geometries.map(withZ); return g;
       }
-      if('coordinates'in g)g.coordinates=addZ(g.coordinates,z);
+      if('coordinates'in g) g.coordinates=addZ(g.coordinates,z);
       return g;
     }
 
-    /* ---------- 1.4 Serialise to EWKT -------------- */
+    /* Multiparts helper ------------------------------------------- */
     function buildMulti(t){
       const coords=fg.toGeoJSON().features.map(f=>withZ(f.geometry).coordinates);
       const type={multipoint:'MultiPoint',multilinestring:'MultiLineString',multipolygon:'MultiPolygon'}[t];
       return window.wellknown.stringify({type,coordinates:coords});
     }
 
+    /* Serialiser --------------------------------------------------- */
     function toWkt(){
       const gj=fg.toGeoJSON();
-      if(!gj.features.length)return '';
+      if(!gj.features.length) return '';
 
       let wkt;
-      if(EXPECT==='geometrycollection'){
-        wkt=(WANT_Z?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
-             gj.features.map(f=>window.wellknown.stringify(withZ(f.geometry))).join(',')+
-             ')';
-      }else if(EXPECT==='multipolygon'||EXPECT==='multilinestring'||EXPECT==='multipoint'){
-        wkt=buildMulti(EXPECT);
+      if(CFG.expect==='geometrycollection'){
+        wkt=(CFG.wantZ?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
+          gj.features.map(f=>window.wellknown.stringify(withZ(f.geometry))).join(',')+
+          ')';
+      }else if(CFG.expect==='multipolygon'||CFG.expect==='multilinestring'||CFG.expect==='multipoint'){
+        wkt=buildMulti(CFG.expect);
       }else if(gj.features.length===1){
         wkt=window.wellknown.stringify(withZ(gj.features[0].geometry));
       }else{
-        wkt=(WANT_Z?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
-             gj.features.map(f=>window.wellknown.stringify(withZ(f.geometry))).join(',')+
-             ')';
+        wkt=(CFG.wantZ?'GEOMETRYCOLLECTION Z(':'GEOMETRYCOLLECTION(')+
+          gj.features.map(f=>window.wellknown.stringify(withZ(f.geometry))).join(',')+
+          ')';
       }
-      return wkt?('SRID='+SRID+';'+wkt):'';
+      return wkt ? ('SRID='+CFG.srid+';'+wkt) : '';
+    }
+    function sync(){ hidden.value=toWkt(); }
+
+    map.on(L.Draw.Event.CREATED, e=>{ fg.addLayer(e.layer); sync(); });
+    map.on(L.Draw.Event.EDITED,  sync);
+    map.on(L.Draw.Event.DELETED, sync);
+    if(CFG.wantZ){
+      const zEl=document.getElementById(CFG.zId);
+      if(zEl) zEl.addEventListener('change', sync);
     }
 
-    function sync(){hidden.value=toWkt();}
-
-    map.on(L.Draw.Event.CREATED,e=>{fg.addLayer(e.layer);sync();});
-    map.on(L.Draw.Event.EDITED, sync);
-    map.on(L.Draw.Event.DELETED, sync);
-    if(WANT_Z){
-      const zEl=document.getElementById(Z_ID);
-      if(zEl)zEl.addEventListener('change',sync);
+    /* Locate control ---------------------------------------------- */
+    if(CFG.locateEnabled && L.control && L.control.locate){
+      try{ L.control.locate(CFG.locateOpts).addTo(map); }
+      catch(e){ console.error('Locate control error', e); }
     }
   }
 })();
