@@ -86,7 +86,7 @@ const LEAFLET = Object.freeze({
 });
 
 /**
- * Leaflet-providers add-on – exposes 200+ community tile servers.
+ * Leaflet-providers add-on – exposes 200 + community tile servers.
  * The script is loaded on-demand when a view actively uses a provider.
  *
  * @typedef {Object} LeafletProvidersStatic
@@ -102,6 +102,23 @@ const LEAFLET_PROVIDERS = Object.freeze({
   },
 });
 
+/**
+ * Leaflet-gesture-handling add-on – improves UX on touch devices by forcing
+ * two-finger pan / ⌘ + scroll zoom.  Loaded dynamically only when enabled.
+ *
+ * @typedef {Object} LeafletGestureStatic
+ * @property {string} js
+ * @property {() => string} header
+ */
+
+/** @type {LeafletGestureStatic} */
+const LEAFLET_GESTURE = Object.freeze({
+  js: `/plugins/public/${PLUGIN_SLUG}/leaflet-gesturehandling/leaflet-gesture-handling.min.js`,
+  header() {
+    return `<script id="sc-leaflet-gesture" src="${this.js}" defer></script>`;
+  },
+});
+
 module.exports = {
   PLUGIN_DEBUG,
   PLUGIN_SLUG,
@@ -111,4 +128,5 @@ module.exports = {
   LEAFLET,
   DEFAULT_CENTER,
   LEAFLET_PROVIDERS,
+  LEAFLET_GESTURE,
 };
