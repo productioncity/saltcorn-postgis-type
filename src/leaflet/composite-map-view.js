@@ -4,15 +4,19 @@
  * View-template “composite_map” – plots every geometry row returned by the
  * query on one interactive Leaflet map.
  *
- * v3 – 2025-04-26
- *   • Hover/touch-hover pop-ups: the configured popup (via simple column or
- *     Handlebars template) now appears when the user hovers a feature with a
- *     mouse or taps-and-holds on touch devices.
- *   • Click/navigation separation: single-click (or the touch equivalent)
- *     triggers the optional *click view* navigation **without** opening the
- *     pop-up, resolving the long-standing conflict.
- *
- * All debug output remains controllable via PLUGIN_DEBUG in src/constants.js.
+ * v4 – 2025-04-27  (extended plug-in support)
+ *   • Add selective support for the bundled Leaflet add-ons found under
+ *     public/leaflet/:
+ *        – Marker-Cluster  (folder: markercluster)
+ *        – Heat-map layer  (folder: heatmap)
+ *        – Full-screen     (folder: fullscreen)
+ *   • Each add-on can be individually enabled through the configuration form.
+ *     Only the required JS/CSS assets are injected at run-time, preventing
+ *     unnecessary overhead.  Debug output for asset-loading decisions is
+ *     still governed by PLUGIN_DEBUG.
+ *   • Heat-map allows an optional *weight* column (numerical) to be chosen.
+ *   • Marker-cluster and heat-map can co-exist.  Clustered markers remain
+ *     clickable and display the same hover pop-ups.
  *
  * Author:      Troy Kelly <troy@team.production.city>
  * Licence:     CC0-1.0
@@ -33,6 +37,7 @@ const {
   LEAFLET,
   DEFAULT_CENTER,
   PLUGIN_DEBUG,
+  PLUGIN_SLUG,
 }                                    = require('../constants');
 
 /* Optional: runtime Handlebars (lazy-loaded via CDN in browser) */
@@ -91,7 +96,7 @@ function buildConfigFields(fields) {
       name: 'popup_template',
       label: 'Popup Handlebars template',
       sublabel:
-        'Optional. Uses Handlebars ‑ row fields are available directly. ' +
+        'Optional. Uses Handlebars – row fields are available directly. ' +
         'Examples: {{name}}, {{#if status}}{{status}}{{/if}}.',
       type: 'String',
       attributes: { input_type: 'textarea', rows: 3 },
@@ -162,6 +167,37 @@ function buildConfigFields(fields) {
       type: 'Integer',
       default: 300,
       attributes: { min: 100 },
+    },
+
+    /* ───── LEAFLET ADD-ONS ───── */
+    {
+      name: 'enable_cluster',
+      label: 'Enable marker clustering',
+      sublabel: 'Groups point markers using Leaflet-MarkerCluster.',
+      type: 'Bool',
+      default: false,
+    },
+    {
+      name: 'enable_heatmap',
+      label: 'Enable heat-map',
+      sublabel:
+        'Builds a heat-map from point geometries using Leaflet-heat. ' +
+        'Optional weight field can be selected below.',
+      type: 'Bool',
+      default: false,
+    },
+    {
+      name: 'heatmap_weight',
+      label: 'Heat-map weight field (numeric)',
+      type: 'String',
+      attributes: { options: opts },
+      showIf: { enable_heatmap: true },
+    },
+    {
+      name: 'enable_fullscreen',
+      label: 'Enable full-screen control',
+      type: 'Bool',
+      default: false,
     },
   ];
 }
@@ -241,13 +277,36 @@ function configurationWorkflow(...sig) {
   });
 }
 
+/* ────────────────────── Add-on asset registry ─────────────────────── */
+
+/**
+ * Maps configuration keys ➜ asset descriptors.
+ *
+ * NOTE: only the *relative* paths (under public/leaflet/) are required here.
+ */
+const ADDON_ASSETS = Object.freeze({
+  cluster: {
+    css: `/plugins/public/${PLUGIN_SLUG}/leaflet/markercluster/MarkerCluster.css`,
+    cssDefault: `/plugins/public/${PLUGIN_SLUG}/leaflet/markercluster/MarkerCluster.Default.css`,
+    js: `/plugins/public/${PLUGIN_SLUG}/leaflet/markercluster/leaflet.markercluster.js`,
+  },
+  heatmap: {
+    js: `/plugins/public/${PLUGIN_SLUG}/leaflet/heatmap/leaflet.heat.js`,
+  },
+  fullscreen: {
+    css: `/plugins/public/${PLUGIN_SLUG}/leaflet/fullscreen/leaflet.fullscreen.css`,
+    js: `/plugins/public/${PLUGIN_SLUG}/leaflet/fullscreen/Leaflet.fullscreen.js`,
+  },
+});
+
 /* ───────────────────────────── View template ─────────────────────────── */
 
 const compositeMapTemplate = {
   name: 'composite_map',
   description:
     'Plots every geometry row from the query on a Leaflet map. Hover to ' +
-    'see pop-ups – click/tap navigates (if configured).',
+    'see pop-ups – click/tap navigates (if configured).  Optional add-ons ' +
+    'such as marker-clustering and heat-map are supported.',
   display_state_form: false,
   get_state_fields: () => [],
   configuration_workflow: configurationWorkflow,
@@ -281,6 +340,12 @@ const compositeMapTemplate = {
     const groupField = cfg.group_field  || '';
     const rowLimit   = Number(cfg.row_limit) || 0;
 
+    /* Add-ons */
+    const enableCluster     = !!cfg.enable_cluster;
+    const enableHeatmap     = !!cfg.enable_heatmap;
+    const heatWeightField   = enableHeatmap ? cfg.heatmap_weight || '' : '';
+    const enableFullscreen  = !!cfg.enable_fullscreen;
+
     /* ───── Fetch table + rows ───── */
     const where =
       typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef };
@@ -311,9 +376,21 @@ const compositeMapTemplate = {
 
     /* ───── Build FeatureCollection ───── */
     const features = [];
+    const heatPts  = []; // [lat, lng, weight?]
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
       if (!gj) continue;
+
+      /* Capture heat-map lat/lng early (only for Point geometries) */
+      if (enableHeatmap) {
+        if (gj.type === 'Point' || (gj.type === 'Feature' && gj.geometry?.type === 'Point')) {
+          const coords = gj.type === 'Point' ? gj.coordinates : gj.geometry.coordinates;
+          const latlng = [coords[1], coords[0]];
+          if (heatWeightField && Number.isFinite(Number(row[heatWeightField]))) {
+            heatPts.push([...latlng, Number(row[heatWeightField])]);
+          } else heatPts.push(latlng);
+        }
+      }
 
       features.push({
         type: 'Feature',
@@ -321,7 +398,7 @@ const compositeMapTemplate = {
         geometry: gj.type === 'Feature' ? gj.geometry : gj,
       });
     }
-    dbg.info('Features built', { count: features.length });
+    dbg.info('Features built', { count: features.length, heatPts: heatPts.length });
 
     const collection = { type: 'FeatureCollection', features };
     const mapId      = `cmp_${Math.random().toString(36).slice(2)}`;
@@ -337,6 +414,28 @@ const compositeMapTemplate = {
          </div>`
       : '';
 
+    /* ───── Build asset lists for dynamic loader ───── */
+    /** @type {string[]} */
+    const cssAssets = [LEAFLET.css];
+    /** @type {string[]} */
+    const jsAssets  = [LEAFLET.js];
+
+    if (popupTemplate || iconTemplate) jsAssets.push(HANDLEBARS_CDN);
+
+    if (enableCluster) {
+      cssAssets.push(ADDON_ASSETS.cluster.css, ADDON_ASSETS.cluster.cssDefault);
+      jsAssets.push(ADDON_ASSETS.cluster.js);
+    }
+    if (enableHeatmap) {
+      jsAssets.push(ADDON_ASSETS.heatmap.js);
+    }
+    if (enableFullscreen) {
+      cssAssets.push(ADDON_ASSETS.fullscreen.css);
+      jsAssets.push(ADDON_ASSETS.fullscreen.js);
+    }
+
+    dbg.debug('Asset registry', { cssAssets, jsAssets });
+
     /* ───── HTML + JS payload ───── */
     return `
 ${createBtnHTML}
@@ -345,40 +444,42 @@ ${createBtnHTML}
 (function(){
   /* ─── Config & constants (embedded server-side) ─── */
   const DBG=${js(PLUGIN_DEBUG)};
-  const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
-        hbJs=${js(HANDLEBARS_CDN)},
+  const CSS_LIST=${js(cssAssets)}, JS_LIST=${js(jsAssets)},
+        hb=${js(HANDLEBARS_CDN)},
         geo=${js(collection)}, id=${js(mapId)},
         lbl=${js(popupField)}, navView=${js(clickView)},
         grp=${js(groupField)},
-        tplSrc=${js(popupTemplate)}, iconTplSrc=${js(iconTemplate)};
+        tplSrc=${js(popupTemplate)}, iconTplSrc=${js(iconTemplate)},
+        enableCluster=${enableCluster}, enableHeat=${enableHeatmap},
+        heatPts=${js(heatPts)}, enableFS=${enableFullscreen};
 
   /* Loader helpers – ensure idempotent asset loading */
   function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
   function haveJs(s){return !!(document._loadedScripts&&document._loadedScripts[s]);}
-  function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
+  function loadCss(h){return new Promise(r=>{if(haveCss(h)){if(DBG)console.debug('CSS cached',h);return r();}
     const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;
     document.head.appendChild(l);});}
-  function loadJs(s){return new Promise(r=>{if(haveJs(s))return r();
+  function loadJs(s){return new Promise(r=>{if(haveJs(s)){if(DBG)console.debug('JS cached',s);return r();}
     const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){
-      document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
+      document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;if(DBG)console.debug('JS loaded',s);r();};
     document.head.appendChild(sc);});}
 
-  /* Colour palette for group-by */
-  const PALETTE=['red','blue','green','orange','purple','darkred','cadetblue',
-                 'darkgreen','darkblue','darkpurple'];
-  const grpColour={};
+  (async()=>{
+    for(const c of CSS_LIST) await loadCss(c);
+    for(const j of JS_LIST)  await loadJs(j);
 
-  /* ─────────────────────────── Main async bootstrap ───────────────────────── */
-  (async()=>{await loadCss(css);await loadJs(jsSrc);
-    if(tplSrc||iconTplSrc) await loadJs(hbJs);
+    const popupFn=(window.Handlebars&&tplSrc)?Handlebars.compile(tplSrc):null;
+    const iconFn=(window.Handlebars&&iconTplSrc)?Handlebars.compile(iconTplSrc):null;
 
-    const popupFn = (window.Handlebars&&tplSrc)?Handlebars.compile(tplSrc):null;
-    const iconFn  = (window.Handlebars&&iconTplSrc)?Handlebars.compile(iconTplSrc):null;
-
-    /* Map initialisation */
-    const map=L.map(id).setView([${lat},${lng}],${zoom});
+    /* ─── Map initialisation ─── */
+    const map=L.map(id,{ fullscreenControl: enableFS }).setView([${lat},${lng}],${zoom});
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
       { attribution:'&copy; OpenStreetMap' }).addTo(map);
+
+    /* Colour palette for group-by */
+    const PALETTE=['red','blue','green','orange','purple','darkred','cadetblue',
+                   'darkgreen','darkblue','darkpurple'];
+    const grpColour={};
 
     /* ─── Marker factory ─── */
     function buildMarker(f,latlng){
@@ -414,56 +515,83 @@ ${createBtnHTML}
       return L.marker(latlng);
     }
 
-    /* ─── GeoJSON layer ─── */
-    const layer=L.geoJSON(geo,{
-      pointToLayer:function(f,latlng){return buildMarker(f,latlng);},
-      style:function(f){
-        if(iconFn) return {};
-        if(!grp||!f.properties) return {};
-        const g=f.properties[grp];
-        if(!(g in grpColour)){
-          grpColour[g]=PALETTE[Object.keys(grpColour).length%PALETTE.length];
-        }
-        return {color:grpColour[g]};
-      },
-      onEachFeature:function(f,l){
-        /* ----- Popup content resolution ----- */
-        let popContent='';
-        if(popupFn){
-          try{popContent=popupFn(f.properties);}catch(e){if(DBG)console.warn(e);}
-        }else if(lbl&&f.properties&&f.properties[lbl]!==undefined){
-          popContent=String(f.properties[lbl]);
-        }
+    /* ─── GeoJSON / layer handling ─── */
+    let featureLayer;
+    if(enableCluster && window.L.markerClusterGroup){
+      const clusterGroup=L.markerClusterGroup();
+      featureLayer=L.geoJSON(geo,{
+        pointToLayer:(f,latlng)=>buildMarker(f,latlng),
+        onEachFeature:onEachFeature,
+        style:styleFn,
+      });
+      clusterGroup.addLayer(featureLayer);
+      clusterGroup.addTo(map);
+      featureLayer=clusterGroup; // for bounds fitting later
+    }else{
+      featureLayer=L.geoJSON(geo,{
+        pointToLayer:(f,latlng)=>buildMarker(f,latlng),
+        onEachFeature:onEachFeature,
+        style:styleFn,
+      }).addTo(map);
+    }
 
-        /* ----- Hover/touch-hover pop-up behaviour ----- */
-        if(popContent){
-          const show=function(e){
-            try{
-              const ll=e?.latlng|| (l.getBounds?l.getBounds().getCenter(): l.getLatLng?.());
-              if(!ll) return;
-              l.__pcHoverPopup=L.popup({closeButton:false,autoClose:true})
-                                 .setLatLng(ll).setContent(popContent).openOn(map);
-            }catch(err){if(DBG)console.error(err);}
-          };
-          const hide=function(){
-            try{
-              if(l.__pcHoverPopup){map.closePopup(l.__pcHoverPopup);l.__pcHoverPopup=null;}
-            }catch(err){if(DBG)console.error(err);}
-          };
-          l.on('mouseover',show);
-          l.on('mouseout',hide);
-          l.on('touchstart',show);
-          l.on('touchend touchcancel',hide);
-        }
-
-        /* ----- Click navigation (kept distinct) ----- */
-        if(navView&&f.properties&&f.properties.__id){
-          l.on('click',()=>{window.location.href='/view/'+navView+'?id='+f.properties.__id;});
-        }
+    /* Style fn with group colouring for non-point */
+    function styleFn(f){
+      if(iconFn) return {};
+      if(!grp||!f.properties) return {};
+      const g=f.properties[grp];
+      if(!(g in grpColour)){
+        grpColour[g]=PALETTE[Object.keys(grpColour).length%PALETTE.length];
       }
-    }).addTo(map);
+      return {color:grpColour[g]};
+    }
 
-    if(layer.getLayers().length) map.fitBounds(layer.getBounds(),{maxZoom:14});
+    /* Attach pop-ups and click nav */
+    function onEachFeature(f,l){
+      /* Popup */
+      let popContent='';
+      if(popupFn){
+        try{popContent=popupFn(f.properties);}catch(e){if(DBG)console.warn(e);}
+      }else if(lbl&&f.properties&&f.properties[lbl]!==undefined){
+        popContent=String(f.properties[lbl]);
+      }
+
+      if(popContent){
+        const show=function(e){
+          try{
+            const ll=e?.latlng|| (l.getBounds?l.getBounds().getCenter(): l.getLatLng?.());
+            if(!ll) return;
+            l.__pcHoverPopup=L.popup({closeButton:false,autoClose:true})
+                               .setLatLng(ll).setContent(popContent).openOn(map);
+          }catch(err){if(DBG)console.error(err);}
+        };
+        const hide=function(){
+          try{
+            if(l.__pcHoverPopup){map.closePopup(l.__pcHoverPopup);l.__pcHoverPopup=null;}
+          }catch(err){if(DBG)console.error(err);}
+        };
+        l.on('mouseover',show);
+        l.on('mouseout',hide);
+        l.on('touchstart',show);
+        l.on('touchend touchcancel',hide);
+      }
+
+      /* Navigation */
+      if(navView&&f.properties&&f.properties.__id){
+        l.on('click',()=>{window.location.href='/view/'+navView+'?id='+f.properties.__id;});
+      }
+    }
+
+    /* ─── Heat-map overlay ─── */
+    if(enableHeat && window.L.heatLayer && heatPts.length){
+      const heat=L.heatLayer(heatPts,{ radius:25, blur:15 });
+      heat.addTo(map);
+    }
+
+    /* Fit bounds */
+    if(featureLayer && featureLayer.getLayers && featureLayer.getLayers().length){
+      if(featureLayer.getBounds) map.fitBounds(featureLayer.getBounds(),{maxZoom:14});
+    }
   })();
 })();
 </script>`;
