@@ -1,6 +1,7 @@
 # Application
 /test.json
 /test.docx
+public/
 
 # LLM
 /.llm.json
