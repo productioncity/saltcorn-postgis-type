@@ -1,41 +1,38 @@
 /**
  * composite-map-view.js
  * -----------------------------------------------------------------------------
- * View-template “composite_map”
+ * View-template “composite_map”.
  *
  * Plots every geometry row returned by the query on a Leaflet map.  
- * Administrators can optionally select **any** of the 200 + community basemaps
+ * Administrators can optionally select **any** of the 200 + community basemaps
  * provided by the bundled Leaflet-providers add-on.  The heavy providers JS is
  * loaded in the browser only when a view is configured to use it.
  *
- * v4.1 – 2025-04-27
- *   • Robust provider list parsing – now supplies a working drop-down even in
- *     ultra-restricted server environments.
- *   • Graceful degradation: if the list cannot be parsed, a single fallback
- *     option keeps the wizard usable (and validation passes).
+ * v5.0 – 2025-04-27
+ *   • Added full *opt-in* support for the “leaflet-gesture-handling” add-on.  
+ *     A third wizard page “Interaction” lets administrators enable / disable
+ *     the feature.  When OFF (default) the add-on is not loaded, so there is
+ *     **zero** overhead.
  *
- * Author:      Troy Kelly <troy@team.production.city>
- * Licence:     CC0-1.0
+ * Author:  Troy Kelly <troy@team.production.city>
+ * Licence: CC0-1.0
  */
 
 'use strict';
 
 /* eslint-disable max-lines-per-function */
 
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
-
 const dbg = require('../utils/debug');
 
-const Table = require('@saltcorn/data/models/table');
-const Workflow = require('@saltcorn/data/models/workflow');
-const Form = require('@saltcorn/data/models/form');
+const Table     = require('@saltcorn/data/models/table');
+const Workflow  = require('@saltcorn/data/models/workflow');
+const Form      = require('@saltcorn/data/models/form');
 
 const { wktToGeoJSON } = require('../utils/geometry');
 const {
   LEAFLET,
   LEAFLET_PROVIDERS,
+  LEAFLET_GESTURE,
   DEFAULT_CENTER,
   PLUGIN_DEBUG,
 } = require('../constants');
@@ -44,17 +41,17 @@ const {
 const HANDLEBARS_CDN =
   'https://cdn.jsdelivr.net/npm/handlebars@4.7.7/dist/handlebars.min.js';
 
-/* ─────────────────── Saltcorn 0.x / 1.x compatibility ────────────────── */
+/* ─────────────────── Saltcorn 0.x / 1.x compatibility ─────────────────── */
 
 const TableCls = Table?.findOne ? Table : Table?.Table ? Table.Table : Table;
 
 const ViewMod = require('@saltcorn/data/models/view');
 const ViewCls = ViewMod?.findOne ? ViewMod : ViewMod?.View ? ViewMod.View : ViewMod;
 
-/* ───────────────────────────── helpers ──────────────────────────────── */
+/* ────────────────────────── helpers ────────────────────────── */
 
 /**
- * JS-safe JSON literal helper.
+ * JS-safe JSON stringifier.
  *
  * @param {unknown} v
  * @returns {string}
@@ -63,10 +60,10 @@ function js(v) {
   return JSON.stringify(v ?? null).replace(/</g, '\\u003c');
 }
 
-/* ---------------------------------------------------------------------- */
-/* Hard-coded provider list – DROP-IN from leaflet-providers catalogue    */
-/* (keys sorted A-Z for usability)                                        */
-/* ---------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------- */
+/* Static provider list – drop-in from leaflet-providers catalogue           */
+/* ------------------------------------------------------------------------- */
+/* The list is hard-coded to avoid heavy parsing at start-up.                */
 const PROVIDERS = Object.freeze([
   /* --- AzureMaps --- */
   'AzureMaps.MicrosoftImagery',
@@ -134,7 +131,7 @@ const PROVIDERS = Object.freeze([
   'HikeBike.HikeBike',
   'HikeBike.HillShading',
 
-  /* --- HERE (legacy) --- (representative subset) */
+  /* --- HERE (legacy) --- */
   'HERE.normalDay',
   'HERE.normalDayGrey',
   'HERE.normalNight',
@@ -142,7 +139,7 @@ const PROVIDERS = Object.freeze([
   'HERE.hybridDay',
   'HERE.pedestrianDay',
 
-  /* --- HERE v3 --- (representative subset) */
+  /* --- HERE v3 --- */
   'HEREv3.normalDay',
   'HEREv3.normalNight',
   'HEREv3.hybridDay',
@@ -205,7 +202,7 @@ const PROVIDERS = Object.freeze([
   'NASAGIBS.ModisTerraAOD',
   'NASAGIBS.ModisTerraChlorophyll',
 
-  /* --- nlmaps (Netherlands) --- */
+  /* --- nlmaps --- */
   'nlmaps.standaard',
   'nlmaps.pastel',
   'nlmaps.grijs',
@@ -238,9 +235,7 @@ const PROVIDERS = Object.freeze([
   'OpenStreetMap.BZH',
   'OpenStreetMap.CAT',
 
-  /* --- OpenTopo / OPNVKarte etc already added above --- */
-
-  /* --- OpenWeatherMap (tiles are overlays) --- */
+  /* --- OpenWeatherMap (overlay tiles) --- */
   'OpenWeatherMap.Clouds',
   'OpenWeatherMap.CloudsClassic',
   'OpenWeatherMap.Precipitation',
@@ -310,23 +305,17 @@ const PROVIDERS = Object.freeze([
 ]);
 
 /**
- * Parse the bundled `leaflet-providers.js` and extract every valid provider
- * key.  Executed once per Node process – the result is cached.
- *
- * For total safety the file is executed inside a sandboxed `vm` context with
- * a fully stubbed fake Leaflet implementation just sufficient for the add-on
- * to populate its catalogue.
- *
- * @returns {string[]} Sorted array of provider keys (`Provider` or
- *                     `Provider.Variant`).  May be empty when parsing fails.
+ * Provider list accessor.  Wrapper future-proofs for later dynamic parsing.
+ * @returns {string[]}
  */
-/* Returns the static list – expansion is just a one-liner. */
 function getProviderOptions() {
-  return PROVIDERS; // simple and robust
+  return PROVIDERS;
 }
 
+/* ─────────────────────── wizard field builders ─────────────────────── */
+
 /**
- * Build select-field options list for page 1 (data & pop-ups).
+ * Wizard page 1 – data & pop-up options.
  *
  * @param {import('@saltcorn/types').Field[]} fields
  * @returns {import('@saltcorn/types').TypeAttribute[]}
@@ -431,14 +420,10 @@ function buildDataFields(fields) {
 
 /**
  * Wizard page 2 – tile provider settings.
- *
  * @returns {import('@saltcorn/types').TypeAttribute[]}
  */
 function buildProviderFields() {
   const providerOptions = getProviderOptions();
-
-  /* Saltcorn treats an empty options list as “no <select> possible” – in that
-     scenario we give the user a dummy entry so the wizard still renders. */
   const safeOptions =
     providerOptions.length > 0
       ? providerOptions
@@ -456,7 +441,7 @@ function buildProviderFields() {
       name: 'tile_provider_name',
       label: 'Provider key',
       type: 'String',
-      required: providerOptions.length > 0, // only require when list ready
+      required: providerOptions.length > 0,
       attributes: { options: safeOptions },
       showIf: { tile_provider_enabled: true },
     },
@@ -474,7 +459,26 @@ function buildProviderFields() {
 }
 
 /**
- * Resolve the Table irrespective of Saltcorn’s sig differences.
+ * Wizard page 3 – interaction settings.
+ * @returns {import('@saltcorn/types').TypeAttribute[]}
+ */
+function buildInteractionFields() {
+  return [
+    {
+      name: 'gesture_handling_enabled',
+      label: 'Enable touch “gesture handling”',
+      sublabel:
+        'Adds the tiny leaflet-gesture-handling plug-in which forces two-finger ' +
+        'panning and ⌘ / Ctrl + scroll zoom.  Greatly reduces accidental ' +
+        'nuisance on mobile.  Adds ~3 KB when enabled.',
+      type: 'Bool',
+      default: false,
+    },
+  ];
+}
+
+/**
+ * Resolve the Table irrespective of Saltcorn’s differing call signatures.
  *
  * @param {unknown[]} sig
  * @returns {Promise<import('@saltcorn/types').Table|undefined>}
@@ -482,26 +486,27 @@ function buildProviderFields() {
 async function resolveTable(sig) {
   const [first, second] = sig;
 
-  /* 1 – numeric ID directly? */
-  const asNum = Number(
+  /* 1 – numeric ID directly supplied? */
+  const maybeId = Number(
     typeof first === 'number' || typeof first === 'string' ? first : second,
   );
-  if (Number.isFinite(asNum) && asNum > 0) {
-    const t = await TableCls.findOne({ id: asNum });
+  if (Number.isFinite(maybeId) && maybeId > 0) {
+    const t = await TableCls.findOne({ id: maybeId });
     if (t) return t;
   }
 
-  /* 2 – Express req variants */
+  /* 2 – Express req variants (0.x / 1.x) */
   const req =
     first && typeof first === 'object' && 'method' in first ? first : undefined;
   if (!req) return undefined;
 
   if (req.view?.table_id) return TableCls.findOne({ id: req.view.table_id });
-  if (req.query?.table) return TableCls.findOne({ name: req.query.table });
+  if (req.query?.table)   return TableCls.findOne({ name: req.query.table });
 
-  /* 3 – param sniff (view name → table) */
+  /* 3 – Path param sniffing (view name → table) */
   const vn =
-    (req.params && (req.params.name || req.params.viewname || req.params[0])) ||
+    (req.params &&
+      (req.params.name || req.params.viewname || req.params[0])) ||
     undefined;
   if (vn) {
     const vw = await ViewCls.findOne({ name: vn });
@@ -511,7 +516,7 @@ async function resolveTable(sig) {
 }
 
 /**
- * Two-step configuration wizard.
+ * Three-step configuration wizard.
  */
 function configurationWorkflow(...sig) {
   return new Workflow({
@@ -519,7 +524,7 @@ function configurationWorkflow(...sig) {
       {
         name: 'Data & Pop-ups',
         form: async () => {
-          const tbl = await resolveTable(sig);
+          const tbl  = await resolveTable(sig);
           const flds = tbl ? await tbl.getFields() : [];
           return new Form({ fields: buildDataFields(flds) });
         },
@@ -528,11 +533,15 @@ function configurationWorkflow(...sig) {
         name: 'Tile Provider',
         form: async () => new Form({ fields: buildProviderFields() }),
       },
+      {
+        name: 'Interaction',
+        form: async () => new Form({ fields: buildInteractionFields() }),
+      },
     ],
   });
 }
 
-/* ───────────────────────────── View template ─────────────────────────── */
+/* ─────────────────────────── View template ─────────────────────────── */
 
 const compositeMapTemplate = {
   name: 'composite_map',
@@ -544,38 +553,47 @@ const compositeMapTemplate = {
   configuration_workflow: configurationWorkflow,
 
   /**
-   * Runtime renderer.
+   * Renderer.
+   *
+   * @param {number|string} tableRef
+   * @param {string}        viewname
+   * @param {object}        cfg
+   * @param {object}        state
+   * @returns {Promise<string>}
    */
   async run(tableRef, viewname, cfg, state) {
     dbg.info('composite_map.run()', { cfg });
 
-    /* ───── Unpack config (page 1) ───── */
-    const geomCol = cfg.geometry_field || 'geom';
-    const popupField = cfg.popup_field || '';
-    const popupTemplate = cfg.popup_template || '';
-    const iconTemplate = cfg.icon_template || '';
+    /* ───── page 1 config ───── */
+    const geomCol       = cfg.geometry_field   || 'geom';
+    const popupField    = cfg.popup_field      || '';
+    const popupTemplate = cfg.popup_template   || '';
+    const iconTemplate  = cfg.icon_template    || '';
 
-    const clickView = cfg.click_view || '';
-    const height = Number(cfg.height) || 300;
+    const clickView  = cfg.click_view || '';
+    const height     = Number(cfg.height) || 300;
 
     const showCreate = cfg.show_create && cfg.create_view;
     const createView = cfg.create_view || '';
 
     const orderField = cfg.order_field || '';
-    const orderDesc = !!cfg.order_desc;
+    const orderDesc  = !!cfg.order_desc;
     const groupField = cfg.group_field || '';
-    const rowLimit = Number(cfg.row_limit) || 0;
+    const rowLimit   = Number(cfg.row_limit) || 0;
 
-    /* ───── Unpack config (page 2) ───── */
+    /* ───── page 2 config ───── */
     const providerEnabled = !!cfg.tile_provider_enabled;
-    const providerName = cfg.tile_provider_name || '';
-    let providerOpts = {};
+    const providerName    = cfg.tile_provider_name || '';
+    let   providerOpts    = {};
     if (providerEnabled && cfg.tile_provider_options) {
       try { providerOpts = JSON.parse(cfg.tile_provider_options); }
-      catch { /* ignore invalid JSON */ }
+      catch { /* ignore malformed JSON */ }
     }
 
-    /* ───── Fetch table & rows ───── */
+    /* ───── page 3 config ───── */
+    const gestureEnabled = !!cfg.gesture_handling_enabled;
+
+    /* ───── fetch rows ───── */
     const table = await TableCls.findOne(
       typeof tableRef === 'number' ? { id: tableRef } : { name: tableRef },
     );
@@ -583,20 +601,18 @@ const compositeMapTemplate = {
 
     let rows = await table.getRows(state);
 
-    /* ordering / limiting */
+    /* order / limit on server side for speed */
     if (orderField) {
       rows.sort((a, b) =>
         a[orderField] === b[orderField]
           ? 0
-          : a[orderField] > b[orderField]
-            ? 1
-            : -1,
+          : a[orderField] > b[orderField] ? 1 : -1,
       );
       if (orderDesc) rows.reverse();
     }
     if (rowLimit > 0) rows = rows.slice(0, rowLimit);
 
-    /* Build GeoJSON FeatureCollection */
+    /* GeoJSON FeatureCollection */
     const features = [];
     for (const row of rows) {
       const gj = wktToGeoJSON(row[geomCol]);
@@ -609,21 +625,19 @@ const compositeMapTemplate = {
     }
     const collection = { type: 'FeatureCollection', features };
 
+    /* ───── HTML scaffold ───── */
     const mapId = `cmp_${Math.random().toString(36).slice(2)}`;
     const { lat, lng, zoom } = DEFAULT_CENTER;
 
-    /* ───── Optional create-row button ───── */
-    const createBtn =
-      showCreate
-        ? `<div class="mb-2 text-end">
-             <a class="btn btn-sm btn-primary"
-                href="/view/${createView}?redirect=/view/${viewname}">
-               <i class="fas fa-plus"></i>&nbsp;Create&nbsp;new&nbsp;row
-             </a>
-           </div>`
-        : '';
+    const createBtn = showCreate
+      ? `<div class="mb-2 text-end">
+           <a class="btn btn-sm btn-primary"
+              href="/view/${createView}?redirect=/view/${viewname}">
+             <i class="fas fa-plus"></i>&nbsp;Create&nbsp;new&nbsp;row
+           </a>
+         </div>`
+      : '';
 
-    /* ───── Final HTML/JS payload ───── */
     return `
 ${createBtn}
 <div id="${mapId}" class="border rounded" style="height:${height}px;"></div>
@@ -633,20 +647,21 @@ ${createBtn}
   const DBG=${js(PLUGIN_DEBUG)};
   const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
         hbSrc=${js(HANDLEBARS_CDN)}, providersSrc=${js(LEAFLET_PROVIDERS.js)},
+        gestureSrc=${js(LEAFLET_GESTURE.js)},
         geo=${js(collection)}, mapId=${js(mapId)},
         lbl=${js(popupField)}, grp=${js(groupField)},
         tplSrc=${js(popupTemplate)}, iconTplSrc=${js(iconTemplate)},
         navView=${js(clickView)},
         provEnabled=${js(providerEnabled)}, provName=${js(providerName)},
-        provOpts=${js(providerOpts)};
+        provOpts=${js(providerOpts)}, gestureEnabled=${js(gestureEnabled)};
 
-  /* dynamic loaders (idempotent) */
-  function haveCss(h){return !!document.querySelector('link[href="'+h+'"]');}
-  function haveJs(s){ return !!(document._loadedScripts&&document._loadedScripts[s]);}
-  function loadCss(h){return new Promise(r=>{if(haveCss(h))return r();
+  /* dynamic loaders */
+  function hasCss(h){return !!document.querySelector('link[href="'+h+'"]');}
+  function hasJs(s){ return !!(document._loadedScripts&&document._loadedScripts[s]);}
+  function loadCss(h){return new Promise(r=>{if(hasCss(h))return r();
     const l=document.createElement('link');l.rel='stylesheet';l.href=h;l.onload=r;
     document.head.appendChild(l);});}
-  function loadJs(s){return new Promise(r=>{if(haveJs(s))return r();
+  function loadJs(s){return new Promise(r=>{if(hasJs(s))return r();
     const sc=document.createElement('script');sc.src=s;sc.async=true;sc.onload=function(){
       document._loadedScripts=document._loadedScripts||{};document._loadedScripts[s]=true;r();};
     document.head.appendChild(sc);});}
@@ -655,22 +670,23 @@ ${createBtn}
                  'darkgreen','darkblue','darkpurple'];
   const grpColour={};
 
-  /* bootstrap */
   (async()=>{
     await loadCss(css); await loadJs(jsSrc);
     if(tplSrc||iconTplSrc) await loadJs(hbSrc);
     if(provEnabled) await loadJs(providersSrc);
+    if(gestureEnabled) await loadJs(gestureSrc);
 
     const popupFn = window.Handlebars&&tplSrc ? Handlebars.compile(tplSrc) : null;
     const iconFn  = window.Handlebars&&iconTplSrc ? Handlebars.compile(iconTplSrc) : null;
 
-    const map = L.map(mapId).setView([${lat},${lng}],${zoom});
+    const mapOpts = gestureEnabled ? { gestureHandling:true } : {};
+    const map = L.map(mapId, mapOpts).setView([${lat},${lng}],${zoom});
 
     /* base layer */
     let base;
     if(provEnabled && L.tileLayer.provider && provName){
       try{ base=L.tileLayer.provider(provName, provOpts).addTo(map); }
-      catch(e){ if(DBG)console.error('Provider failed, falling back.',e); }
+      catch(e){ if(DBG)console.error('Provider failed', e); }
     }
     if(!base){
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
@@ -679,12 +695,11 @@ ${createBtn}
     }
 
     /* marker factory */
-    function makeMarker(f,latlng){
-      if(iconFn){       /* template-driven icon */
+    function makeMarker(f, latlng){
+      if(iconFn){
         let html='';
-        try{ html=iconFn(f.properties);}catch(e){if(DBG)console.warn(e);}
+        try{ html=iconFn(f.properties); }catch(e){ if(DBG)console.warn(e); }
         if(!html) return L.marker(latlng);
-
         if(/^(https?:)?\\/\\/.+\\.(png|jpe?g|gif|svg)$/i.test(html)){
           return L.marker(latlng,{
             icon:L.icon({iconUrl:html,iconSize:[28,28],iconAnchor:[14,28]})
@@ -719,13 +734,12 @@ ${createBtn}
         if(!(g in grpColour)){
           grpColour[g]=PALETTE[Object.keys(grpColour).length%PALETTE.length];
         }
-        return {color:grpColour[g]};
+        return { color:grpColour[g] };
       },
       onEachFeature:(f,l)=>{
-        /* hover pop-up */
         let pop='';
         if(popupFn){
-          try{pop=popupFn(f.properties);}catch(e){if(DBG)console.warn(e);}
+          try{ pop=popupFn(f.properties); }catch(e){ if(DBG)console.warn(e); }
         }else if(lbl && f.properties?.[lbl]!==undefined){
           pop=String(f.properties[lbl]);
         }
@@ -736,14 +750,13 @@ ${createBtn}
             l.__p=L.popup({closeButton:false,autoClose:true})
                    .setLatLng(ll).setContent(pop).openOn(map);
           };
-          const hide=()=>{ if(l.__p){map.closePopup(l.__p);l.__p=null;} };
+          const hide=()=>{ if(l.__p){ map.closePopup(l.__p); l.__p=null; } };
           l.on('mouseover',show).on('mouseout',hide)
            .on('touchstart',show).on('touchend touchcancel',hide);
         }
 
-        /* click navigation */
         if(navView && f.properties?.__id){
-          l.on('click',()=>{location.href='/view/'+navView+'?id='+f.properties.__id;});
+          l.on('click',()=>{ location.href='/view/'+navView+'?id='+f.properties.__id; });
         }
       }
     }).addTo(map);
