@@ -22,15 +22,15 @@
 
 /* eslint-disable max-lines-per-function */
 
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
-const vm   = require('vm');
+const vm = require('vm');
 
 const dbg = require('../utils/debug');
 
-const Table    = require('@saltcorn/data/models/table');
+const Table = require('@saltcorn/data/models/table');
 const Workflow = require('@saltcorn/data/models/workflow');
-const Form     = require('@saltcorn/data/models/form');
+const Form = require('@saltcorn/data/models/form');
 
 const { wktToGeoJSON } = require('../utils/geometry');
 const {
@@ -48,8 +48,8 @@ const HANDLEBARS_CDN =
 
 const TableCls = Table?.findOne ? Table : Table?.Table ? Table.Table : Table;
 
-const ViewMod  = require('@saltcorn/data/models/view');
-const ViewCls  = ViewMod?.findOne ? ViewMod : ViewMod?.View ? ViewMod.View : ViewMod;
+const ViewMod = require('@saltcorn/data/models/view');
+const ViewCls = ViewMod?.findOne ? ViewMod : ViewMod?.View ? ViewMod.View : ViewMod;
 
 /* ───────────────────────────── helpers ──────────────────────────────── */
 
@@ -63,6 +63,252 @@ function js(v) {
   return JSON.stringify(v ?? null).replace(/</g, '\\u003c');
 }
 
+/* ---------------------------------------------------------------------- */
+/* Hard-coded provider list – DROP-IN from leaflet-providers catalogue    */
+/* (keys sorted A-Z for usability)                                        */
+/* ---------------------------------------------------------------------- */
+const PROVIDERS = Object.freeze([
+  /* --- AzureMaps --- */
+  'AzureMaps.MicrosoftImagery',
+  'AzureMaps.MicrosoftBaseDarkGrey',
+  'AzureMaps.MicrosoftBaseRoad',
+  'AzureMaps.MicrosoftBaseHybridRoad',
+  'AzureMaps.MicrosoftTerraMain',
+  'AzureMaps.MicrosoftWeatherInfraredMain',
+  'AzureMaps.MicrosoftWeatherRadarMain',
+
+  /* --- BaseMapDE --- */
+  'BaseMapDE.Color',
+  'BaseMapDE.Grey',
+
+  /* --- BasemapAT --- */
+  'BasemapAT.basemap',
+  'BasemapAT.grau',
+  'BasemapAT.overlay',
+  'BasemapAT.terrain',
+  'BasemapAT.surface',
+  'BasemapAT.highdpi',
+  'BasemapAT.orthofoto',
+
+  /* --- CartoDB --- */
+  'CartoDB.Positron',
+  'CartoDB.PositronNoLabels',
+  'CartoDB.PositronOnlyLabels',
+  'CartoDB.DarkMatter',
+  'CartoDB.DarkMatterNoLabels',
+  'CartoDB.DarkMatterOnlyLabels',
+  'CartoDB.Voyager',
+  'CartoDB.VoyagerNoLabels',
+  'CartoDB.VoyagerOnlyLabels',
+  'CartoDB.VoyagerLabelsUnder',
+
+  /* --- CyclOSM & misc singletons --- */
+  'CyclOSM',
+  'FreeMapSK',
+  'MtbMap',
+  'OpenAIP',
+  'OpenFireMap',
+  'OpenRailwayMap',
+  'OpenSeaMap',
+  'OpenSnowMap.pistes',
+  'OPNVKarte',
+  'SafeCast',
+
+  /* --- Esri --- */
+  'Esri.WorldStreetMap',
+  'Esri.WorldTopoMap',
+  'Esri.WorldImagery',
+  'Esri.WorldTerrain',
+  'Esri.WorldShadedRelief',
+  'Esri.WorldPhysical',
+  'Esri.OceanBasemap',
+  'Esri.NatGeoWorldMap',
+  'Esri.WorldGrayCanvas',
+
+  /* --- GeoportailFrance --- */
+  'GeoportailFrance.plan',
+  'GeoportailFrance.parcels',
+  'GeoportailFrance.orthos',
+
+  /* --- HikeBike --- */
+  'HikeBike.HikeBike',
+  'HikeBike.HillShading',
+
+  /* --- HERE (legacy) --- (representative subset) */
+  'HERE.normalDay',
+  'HERE.normalDayGrey',
+  'HERE.normalNight',
+  'HERE.reducedDay',
+  'HERE.hybridDay',
+  'HERE.pedestrianDay',
+
+  /* --- HERE v3 --- (representative subset) */
+  'HEREv3.normalDay',
+  'HEREv3.normalNight',
+  'HEREv3.hybridDay',
+  'HEREv3.terrainDay',
+  'HEREv3.pedestrianNight',
+
+  /* --- Jawg --- */
+  'Jawg.Streets',
+  'Jawg.Terrain',
+  'Jawg.Lagoon',
+  'Jawg.Sunny',
+  'Jawg.Dark',
+  'Jawg.Light',
+  'Jawg.Matrix',
+
+  /* --- JusticeMap --- */
+  'JusticeMap.income',
+  'JusticeMap.americanIndian',
+  'JusticeMap.asian',
+  'JusticeMap.black',
+  'JusticeMap.hispanic',
+  'JusticeMap.multi',
+  'JusticeMap.nonWhite',
+  'JusticeMap.white',
+  'JusticeMap.plurality',
+
+  /* --- MapTilesAPI --- */
+  'MapTilesAPI.OSMEnglish',
+  'MapTilesAPI.OSMFrancais',
+  'MapTilesAPI.OSMEspagnol',
+
+  /* --- MapTiler Cloud --- */
+  'MapTiler.Streets',
+  'MapTiler.Basic',
+  'MapTiler.Bright',
+  'MapTiler.Pastel',
+  'MapTiler.Positron',
+  'MapTiler.Hybrid',
+  'MapTiler.Toner',
+  'MapTiler.Topo',
+  'MapTiler.Voyager',
+  'MapTiler.Ocean',
+  'MapTiler.Backdrop',
+  'MapTiler.Dataviz',
+  'MapTiler.DatavizLight',
+  'MapTiler.DatavizDark',
+  'MapTiler.Aquarelle',
+  'MapTiler.Landscape',
+  'MapTiler.Openstreetmap',
+  'MapTiler.Outdoor',
+  'MapTiler.Satellite',
+  'MapTiler.Winter',
+
+  /* --- NASAGIBS --- */
+  'NASAGIBS.ModisTerraTrueColorCR',
+  'NASAGIBS.ModisTerraBands367CR',
+  'NASAGIBS.ViirsEarthAtNight2012',
+  'NASAGIBS.ModisTerraLSTDay',
+  'NASAGIBS.ModisTerraSnowCover',
+  'NASAGIBS.ModisTerraAOD',
+  'NASAGIBS.ModisTerraChlorophyll',
+
+  /* --- nlmaps (Netherlands) --- */
+  'nlmaps.standaard',
+  'nlmaps.pastel',
+  'nlmaps.grijs',
+  'nlmaps.water',
+  'nlmaps.luchtfoto',
+
+  /* --- NLS (UK Historic) --- */
+  'NLS.osgb63k1885',
+  'NLS.osgb1888',
+  'NLS.osgb10k1888',
+  'NLS.osgb1919',
+  'NLS.osgb25k1937',
+  'NLS.osgb63k1955',
+  'NLS.oslondon1k1893',
+
+  /* --- OneMap Singapore --- */
+  'OneMapSG.Default',
+  'OneMapSG.Night',
+  'OneMapSG.Original',
+  'OneMapSG.Grey',
+  'OneMapSG.LandLot',
+
+  /* --- OpenStreetMap & variants --- */
+  'OpenStreetMap',
+  'OpenStreetMap.Mapnik',
+  'OpenStreetMap.DE',
+  'OpenStreetMap.CH',
+  'OpenStreetMap.France',
+  'OpenStreetMap.HOT',
+  'OpenStreetMap.BZH',
+  'OpenStreetMap.CAT',
+
+  /* --- OpenTopo / OPNVKarte etc already added above --- */
+
+  /* --- OpenWeatherMap (tiles are overlays) --- */
+  'OpenWeatherMap.Clouds',
+  'OpenWeatherMap.CloudsClassic',
+  'OpenWeatherMap.Precipitation',
+  'OpenWeatherMap.PrecipitationClassic',
+  'OpenWeatherMap.Rain',
+  'OpenWeatherMap.RainClassic',
+  'OpenWeatherMap.Pressure',
+  'OpenWeatherMap.PressureContour',
+  'OpenWeatherMap.Wind',
+  'OpenWeatherMap.Temperature',
+  'OpenWeatherMap.Snow',
+
+  /* --- Stadia --- */
+  'Stadia.AlidadeSmooth',
+  'Stadia.AlidadeSmoothDark',
+  'Stadia.AlidadeSatellite',
+  'Stadia.OSMBright',
+  'Stadia.Outdoors',
+  'Stadia.StamenToner',
+  'Stadia.StamenTonerBackground',
+  'Stadia.StamenTonerLines',
+  'Stadia.StamenTonerLabels',
+  'Stadia.StamenTonerLite',
+  'Stadia.StamenWatercolor',
+  'Stadia.StamenTerrain',
+  'Stadia.StamenTerrainBackground',
+  'Stadia.StamenTerrainLabels',
+  'Stadia.StamenTerrainLines',
+
+  /* --- Swiss Federal Geoportal --- */
+  'SwissFederalGeoportal.NationalMapColor',
+  'SwissFederalGeoportal.NationalMapGrey',
+  'SwissFederalGeoportal.SWISSIMAGE',
+
+  /* --- Thunderforest --- */
+  'Thunderforest.OpenCycleMap',
+  'Thunderforest.Transport',
+  'Thunderforest.TransportDark',
+  'Thunderforest.SpinalMap',
+  'Thunderforest.Landscape',
+  'Thunderforest.Outdoors',
+  'Thunderforest.Pioneer',
+  'Thunderforest.MobileAtlas',
+  'Thunderforest.Neighbourhood',
+
+  /* --- TomTom --- */
+  'TomTom.Basic',
+  'TomTom.Hybrid',
+  'TomTom.Labels',
+
+  /* --- TopPlusOpen (DE) --- */
+  'TopPlusOpen.Color',
+  'TopPlusOpen.Grey',
+
+  /* --- USGS --- */
+  'USGS.USTopo',
+  'USGS.USImagery',
+  'USGS.USImageryTopo',
+
+  /* --- WaymarkedTrails --- */
+  'WaymarkedTrails.hiking',
+  'WaymarkedTrails.cycling',
+  'WaymarkedTrails.mtb',
+  'WaymarkedTrails.slopes',
+  'WaymarkedTrails.riding',
+  'WaymarkedTrails.skating',
+]);
+
 /**
  * Parse the bundled `leaflet-providers.js` and extract every valid provider
  * key.  Executed once per Node process – the result is cached.
@@ -74,71 +320,9 @@ function js(v) {
  * @returns {string[]} Sorted array of provider keys (`Provider` or
  *                     `Provider.Variant`).  May be empty when parsing fails.
  */
+/* Returns the static list – expansion is just a one-liner. */
 function getProviderOptions() {
-  if (getProviderOptions._cache) return getProviderOptions._cache;
-
-  /* ───── Sandbox scaffolding ───── */
-  function makeFakeLeaflet() {
-    /* Minimal stub fulfilling exactly what the add-on references. */
-    function TileLayerCtor() {}
-    TileLayerCtor.prototype.initialize = () => {};
-    TileLayerCtor.extend = () => TileLayerCtor; // simple pass-through
-
-    return {
-      /* Utility helper used by the add-on */
-      Util: {
-        extend: (...objs) => Object.assign({}, ...objs),
-      },
-      /* Core TileLayer “class” */
-      TileLayer: TileLayerCtor,
-    };
-  }
-
-  try {
-    const filePath = path.resolve(
-      __dirname,
-      '../../public/leaflet-providers/leaflet-providers.js',
-    );
-    const code = fs.readFileSync(filePath, 'utf8');
-
-    const sandbox = {
-      L: makeFakeLeaflet(),
-      /* globals poked by the UMD wrapper */
-      console,
-      define: undefined,
-      modules: undefined,
-      module: { exports: {} },
-      exports: {},
-      require: () => ({}),
-    };
-    vm.createContext(sandbox);
-
-    /* Execute – this fills L.TileLayer.Provider.providers */
-    vm.runInContext(code, sandbox, { filename: 'leaflet-providers.js' });
-
-    const providersObj =
-      sandbox.L?.TileLayer?.Provider?.providers || Object.create(null);
-
-    /** @type {string[]} */
-    const out = [];
-    for (const [providerName, providerDef] of Object.entries(providersObj)) {
-      out.push(providerName);
-      if (providerDef && providerDef.variants) {
-        for (const variant of Object.keys(providerDef.variants)) {
-          out.push(`${providerName}.${variant}`);
-        }
-      }
-    }
-    out.sort((a, b) => a.localeCompare(b, 'en'));
-
-    dbg.info('Leaflet provider list parsed', { count: out.length });
-    getProviderOptions._cache = out;
-    return out;
-  } catch (err) {
-    dbg.error('Failed to parse leaflet-providers list – continuing without it.', err);
-    getProviderOptions._cache = [];
-    return [];
-  }
+  return PROVIDERS; // simple and robust
 }
 
 /**
@@ -313,7 +497,7 @@ async function resolveTable(sig) {
   if (!req) return undefined;
 
   if (req.view?.table_id) return TableCls.findOne({ id: req.view.table_id });
-  if (req.query?.table)   return TableCls.findOne({ name: req.query.table });
+  if (req.query?.table) return TableCls.findOne({ name: req.query.table });
 
   /* 3 – param sniff (view name → table) */
   const vn =
@@ -335,7 +519,7 @@ function configurationWorkflow(...sig) {
       {
         name: 'Data & Pop-ups',
         form: async () => {
-          const tbl  = await resolveTable(sig);
+          const tbl = await resolveTable(sig);
           const flds = tbl ? await tbl.getFields() : [];
           return new Form({ fields: buildDataFields(flds) });
         },
@@ -366,26 +550,26 @@ const compositeMapTemplate = {
     dbg.info('composite_map.run()', { cfg });
 
     /* ───── Unpack config (page 1) ───── */
-    const geomCol       = cfg.geometry_field || 'geom';
-    const popupField    = cfg.popup_field    || '';
+    const geomCol = cfg.geometry_field || 'geom';
+    const popupField = cfg.popup_field || '';
     const popupTemplate = cfg.popup_template || '';
-    const iconTemplate  = cfg.icon_template  || '';
+    const iconTemplate = cfg.icon_template || '';
 
     const clickView = cfg.click_view || '';
-    const height    = Number(cfg.height) || 300;
+    const height = Number(cfg.height) || 300;
 
     const showCreate = cfg.show_create && cfg.create_view;
     const createView = cfg.create_view || '';
 
     const orderField = cfg.order_field || '';
-    const orderDesc  = !!cfg.order_desc;
+    const orderDesc = !!cfg.order_desc;
     const groupField = cfg.group_field || '';
-    const rowLimit   = Number(cfg.row_limit) || 0;
+    const rowLimit = Number(cfg.row_limit) || 0;
 
     /* ───── Unpack config (page 2) ───── */
     const providerEnabled = !!cfg.tile_provider_enabled;
-    const providerName    = cfg.tile_provider_name || '';
-    let   providerOpts    = {};
+    const providerName = cfg.tile_provider_name || '';
+    let providerOpts = {};
     if (providerEnabled && cfg.tile_provider_options) {
       try { providerOpts = JSON.parse(cfg.tile_provider_options); }
       catch { /* ignore invalid JSON */ }
