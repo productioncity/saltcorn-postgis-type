@@ -5,14 +5,14 @@
  *
  * Plots every geometry row returned by the query on a Leaflet map.  
  * Administrators can optionally select **any** of the 200 + community basemaps
- * provided by the bundled Leaflet-providers add-on.  The heavy providers JS is
+ * provided by the bundled Leaflet-providers add-on.  The heavy provider JS is
  * loaded in the browser only when a view is configured to use it.
  *
- * v5.0 – 2025-04-27
- *   • Added full *opt-in* support for the “leaflet-gesture-handling” add-on.  
- *     A third wizard page “Interaction” lets administrators enable / disable
- *     the feature.  When OFF (default) the add-on is not loaded, so there is
- *     **zero** overhead.
+ * v6.0 – 2025-04-27
+ *   • Added full *opt-in* support for the “leaflet-locatecontrol” add-on.  
+ *     A fourth wizard page “Locate” lets administrators enable / disable the
+ *     feature and customise key behaviour (follow, fly-to, etc.).  When OFF
+ *     (default) the add-on is not loaded so there is **zero** overhead.
  *
  * Author:  Troy Kelly <troy@team.production.city>
  * Licence: CC0-1.0
@@ -33,6 +33,7 @@ const {
   LEAFLET,
   LEAFLET_PROVIDERS,
   LEAFLET_GESTURE,
+  LEAFLET_LOCATE,
   DEFAULT_CENTER,
   PLUGIN_DEBUG,
 } = require('../constants');
@@ -51,7 +52,7 @@ const ViewCls = ViewMod?.findOne ? ViewMod : ViewMod?.View ? ViewMod.View : View
 /* ────────────────────────── helpers ────────────────────────── */
 
 /**
- * JS-safe JSON stringifier.
+ * JS-safe JSON stringifier for direct `<script>` embedding.
  *
  * @param {unknown} v
  * @returns {string}
@@ -478,6 +479,59 @@ function buildInteractionFields() {
 }
 
 /**
+ * Wizard page 4 – geolocation locate-control settings.
+ * @returns {import('@saltcorn/types').TypeAttribute[]}
+ */
+function buildLocateFields() {
+  return [
+    {
+      name: 'locate_enabled',
+      label: 'Enable “Locate me” control',
+      type: 'Bool',
+      default: false,
+    },
+    {
+      name: 'locate_position',
+      label: 'Control position',
+      type: 'String',
+      attributes: {
+        options: ['topleft', 'topright', 'bottomleft', 'bottomright'],
+      },
+      default: 'topleft',
+      showIf: { locate_enabled: true },
+    },
+    {
+      name: 'locate_follow',
+      label: 'Auto-follow user position',
+      type: 'Bool',
+      default: true,
+      showIf: { locate_enabled: true },
+    },
+    {
+      name: 'locate_keep_zoom',
+      label: 'Keep current zoom level',
+      type: 'Bool',
+      default: false,
+      showIf: { locate_enabled: true },
+    },
+    {
+      name: 'locate_fly_to',
+      label: 'Use smooth fly-to animation',
+      type: 'Bool',
+      default: false,
+      showIf: { locate_enabled: true },
+    },
+    {
+      name: 'locate_show_compass',
+      label: 'Show compass bearing',
+      type: 'Bool',
+      default: true,
+      showIf: { locate_enabled: true },
+    },
+  ];
+}
+
+/**
  * Resolve the Table irrespective of Saltcorn’s differing call signatures.
  *
  * @param {unknown[]} sig
@@ -516,7 +570,7 @@ async function resolveTable(sig) {
 }
 
 /**
- * Three-step configuration wizard.
+ * Four-step configuration wizard.
  */
 function configurationWorkflow(...sig) {
   return new Workflow({
@@ -536,6 +590,10 @@ function configurationWorkflow(...sig) {
       {
         name: 'Interaction',
         form: async () => new Form({ fields: buildInteractionFields() }),
+      },
+      {
+        name: 'Locate',
+        form: async () => new Form({ fields: buildLocateFields() }),
       },
     ],
   });
@@ -587,11 +645,30 @@ const compositeMapTemplate = {
     let   providerOpts    = {};
     if (providerEnabled && cfg.tile_provider_options) {
       try { providerOpts = JSON.parse(cfg.tile_provider_options); }
-      catch { /* ignore malformed JSON */ }
+      // eslint-disable-next-line no-empty
+      catch {} // ignore malformed JSON
     }
 
     /* ───── page 3 config ───── */
     const gestureEnabled = !!cfg.gesture_handling_enabled;
+
+    /* ───── page 4 config ───── */
+    const locateEnabled      = !!cfg.locate_enabled;
+    const locateFollow       = !!cfg.locate_follow;
+    const locateKeepZoom     = !!cfg.locate_keep_zoom;
+    const locateFlyTo        = !!cfg.locate_fly_to;
+    const locateShowCompass  = cfg.locate_show_compass !== undefined
+                                ? !!cfg.locate_show_compass
+                                : true;
+    const locatePosition     = cfg.locate_position || 'topleft';
+
+    const locateOpts = {
+      position: locatePosition,
+      setView: locateFollow ? 'untilPanOrZoom' : 'once',
+      keepCurrentZoomLevel: locateKeepZoom,
+      showCompass: locateShowCompass,
+      flyTo: locateFlyTo,
+    };
 
     /* ───── fetch rows ───── */
     const table = await TableCls.findOne(
@@ -648,12 +725,14 @@ ${createBtn}
   const css=${js(LEAFLET.css)}, jsSrc=${js(LEAFLET.js)},
         hbSrc=${js(HANDLEBARS_CDN)}, providersSrc=${js(LEAFLET_PROVIDERS.js)},
         gestureSrc=${js(LEAFLET_GESTURE.js)},
+        locateCss=${js(LEAFLET_LOCATE.css)}, locateJs=${js(LEAFLET_LOCATE.js)},
         geo=${js(collection)}, mapId=${js(mapId)},
         lbl=${js(popupField)}, grp=${js(groupField)},
         tplSrc=${js(popupTemplate)}, iconTplSrc=${js(iconTemplate)},
         navView=${js(clickView)},
         provEnabled=${js(providerEnabled)}, provName=${js(providerName)},
-        provOpts=${js(providerOpts)}, gestureEnabled=${js(gestureEnabled)};
+        provOpts=${js(providerOpts)}, gestureEnabled=${js(gestureEnabled)},
+        locateEnabled=${js(locateEnabled)}, locateOpts=${js(locateOpts)};
 
   /* dynamic loaders */
   function hasCss(h){return !!document.querySelector('link[href="'+h+'"]');}
@@ -675,6 +754,7 @@ ${createBtn}
     if(tplSrc||iconTplSrc) await loadJs(hbSrc);
     if(provEnabled) await loadJs(providersSrc);
     if(gestureEnabled) await loadJs(gestureSrc);
+    if(locateEnabled){ await loadCss(locateCss); await loadJs(locateJs); }
 
     const popupFn = window.Handlebars&&tplSrc ? Handlebars.compile(tplSrc) : null;
     const iconFn  = window.Handlebars&&iconTplSrc ? Handlebars.compile(iconTplSrc) : null;
@@ -762,6 +842,12 @@ ${createBtn}
     }).addTo(map);
 
     if(layer.getLayers().length) map.fitBounds(layer.getBounds(),{maxZoom:14});
+
+    /* ───── locate control ───── */
+    if(locateEnabled && L.control && L.control.locate){
+      try{ L.control.locate(locateOpts).addTo(map); }
+      catch(e){ if(DBG)console.error('Locate control failed',e); }
+    }
   })();
 })();
 </script>`;
