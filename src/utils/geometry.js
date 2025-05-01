@@ -15,7 +15,16 @@
 /* eslint-disable no-magic-numbers */
 
 const dbg       = require('./debug');
-const wellknown = require('wellknown');
+
+/*
+ *  NOTE ────────────────────────────────────────────────────────────────
+ *  The third-party `wellknown` package is no longer required (it fails
+ *  to install on modern npm).  All Node-side WKT ⇢ GeoJSON parsing is now
+ *  handled by the robust `wkx` library that is already a dependency.
+ *  The Leaflet field-views continue to load wellknown.js **in the
+ *  browser** via CDN – that path is unaffected and incurs no npm cost.
+ *  ─────────────────────────────────────────────────────────────────────
+ */
 
 let wkx;
 try {
@@ -77,7 +86,7 @@ function stripPgCast(src) {
  *
  * @template {'wkt'|'geojson'} T
  * @param {string} hex
- * @param {T} as
+ * @param {T}      as
  * @returns {T extends 'wkt' ? string|undefined
  *          : T extends 'geojson' ? Record<string, unknown>|undefined
  *          : never}
@@ -90,14 +99,17 @@ function decodeHexWkb(hex, as) {
     const geom = wkx.Geometry.parse(Buffer.from(hex, 'hex'));
 
     if (as === 'geojson') {
-      const g = /** @type {never} */ (geom.toGeoJSON());
+      // @ts-ignore generic handling
+      const g = geom.toGeoJSON();
       dbg.debug('decodeHexWkb() ➜ GeoJSON');
       return g;
     }
 
     const srid = geom.srid && geom.srid !== 0 ? `SRID=${geom.srid};` : '';
-    const wkt  = /** @type {never} */ (`${srid}${geom.toWkt()}`);
+    // @ts-ignore generic handling
+    const wkt  = `${srid}${geom.toWkt()}`;
     dbg.debug('decodeHexWkb() ➜ WKT', wkt.slice(0, 64));
+    // @ts-ignore generic handling
     return wkt;
   } catch (e) {
     dbg.warn('decodeHexWkb() failed', e);
@@ -133,7 +145,7 @@ function stripZFromGeoJSON(geojson) {
     if (g.type === 'GeometryCollection' && Array.isArray(g.geometries)) {
       g.geometries.forEach(recurse);
     } else if ('coordinates' in g) {
-      // @ts-ignore – runtime path
+      // @ts-ignore run-time manipulation
       g.coordinates = stripZCoords(g.coordinates);
     }
   }
@@ -244,7 +256,7 @@ function wktToGeoJSON(value) {
   const hexDecoded = decodeHexWkb(raw, 'geojson');
   if (hexDecoded) return normaliseGeoJSON(stripZFromGeoJSON(hexDecoded));
 
-  /* Plain WKT/EWKT */
+  /* Plain WKT / EWKT (via wkx) */
   const txt = raw.replace(/^SRID=\d+;/iu, '');
 
   if (wkx) {
@@ -255,21 +267,24 @@ function wktToGeoJSON(value) {
       dbg.debug('wktToGeoJSON() via wkx');
       return normaliseGeoJSON(stripZFromGeoJSON(gj));
     } catch (e) {
-      dbg.warn('wkx parse failed – falling back to wellknown', e);
+      dbg.warn('wkx parse failed – attempting dim-token scrub', e);
     }
-  }
 
-  try {
-    return normaliseGeoJSON(wellknown.parse(txt));
-  } catch {
+    /* One more try: strip Z/M tokens and re-parse */
     const resc = txt.replace(/\b([A-Z]+)(?:ZM|Z|M)\b/iu, '$1');
     try {
-      return normaliseGeoJSON(wellknown.parse(resc));
+      const gj2 = /** @type {Record<string, unknown>} */ (
+        wkx.Geometry.parse(resc).toGeoJSON()
+      );
+      return normaliseGeoJSON(stripZFromGeoJSON(gj2));
     } catch (err) {
       dbg.warn('wktToGeoJSON() final attempt failed', err);
       return undefined;
     }
   }
+
+  /* No parser available */
+  return undefined;
 }
 
 /**
