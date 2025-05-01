@@ -49,7 +49,7 @@
 			"username": "vscode"
 		}
 	},
-	"initializeCommand": "touch ${localWorkspaceFolder}/.env",
+	// "initializeCommand": "touch ${localWorkspaceFolder}/.env",
 	"postCreateCommand": "echo \"export PATH=$PATH:/home/vscode/.local/bin\" >> ~/.zshrc && npm config set install-strategy nested && npm config set @productioncity:registry https://npm.pkg.github.com && npm config set //npm.pkg.github.com/:_authToken \"${GITHUB_TOKEN}\" && npm config set //registry.npmjs.org/:_authToken \"${NPM_AUTH_TOKEN}\" && npm i",
 	"customizations": {
 		"vscode": {
