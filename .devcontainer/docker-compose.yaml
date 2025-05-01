@@ -13,7 +13,7 @@ services:
       - ../.env
 
   saltcorn:
-    image: saltcorn/saltcorn:latest
+    image: ghcr.io/productioncity/saltcorn:edge
     restart: unless-stopped
     environment:
       - TZ=${TZ:-Australia/Sydney}
@@ -37,11 +37,9 @@ services:
       - ../..:/workspaces:cached
     ports:
       - "3000:3000"
-    command: "serve"
-    entrypoint:
-      - /bin/sh
-      - -euc
-      - 'PG_WAIT_TIMEOUT=$${PG_WAIT_TIMEOUT:-60}; PG_WAIT_INTERVAL=$${PG_WAIT_INTERVAL:-2}; start=$$(date +%s); until pg_isready -h "$$PGHOST" -p "$$PGPORT" -U "$$PGUSER" >/dev/null 2>&1; do if [ $$(( $$(date +%s) - start )) -ge "$$PG_WAIT_TIMEOUT" ]; then echo "Postgres still unreachable after $${PG_WAIT_TIMEOUT}s — exiting."; exit 1; fi; echo "Waiting for Postgres at $${PGHOST}:$${PGPORT}…"; sleep "$$PG_WAIT_INTERVAL"; done; set -- "$$0" "$$@"; exec /usr/local/bin/saltcorn "$$@"'
+    command:
+      - serve
+      - --verbose
     healthcheck:
       test:
         - CMD
