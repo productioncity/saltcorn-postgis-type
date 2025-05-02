@@ -71,7 +71,7 @@
 				"ZainChen.json",
 				"redhat.vscode-yaml",
 				"dbaeumer.vscode-eslint",
-				"ms-azuretools.vscode-docker"
+				"ms-azuretools.vscode-containers"
 			]
 		}
 	}
