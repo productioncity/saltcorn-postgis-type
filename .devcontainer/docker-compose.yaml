@@ -80,7 +80,7 @@ services:
         apt-get update &&
         DEBIAN_FRONTEND=noninteractive apt-get install -y apt-transport-https lsb-release curl postgresql-plpython3-$$PG_MAJOR python3-requests postgresql-$$PG_MAJOR-cron &&
         echo "deb https://packagecloud.io/timescale/timescaledb/debian/ $$(lsb_release -c -s) main" | tee /etc/apt/sources.list.d/timescaledb.list &&
-        curl -L https://packagecloud.io/timescale/timescaledb/gpgkey | gpg --dearmor -o /etc/apt/trusted.gpg.d/timescaledb.gpg &&
+        curl -L https://packagecloud.io/timescale/timescaledb/gpgkey | gpg --dearmor --batch --yes --no-tty -o /etc/apt/trusted.gpg.d/timescaledb.gpg &&
         apt-get update &&
         DEBIAN_FRONTEND=noninteractive apt-get install -y timescaledb-2-postgresql-$$PG_MAJOR timescaledb-toolkit-postgresql-$$PG_MAJOR &&
         if [ ! -d "$$PGDATA" ] || [ -z "$$(ls -A "$$PGDATA" 2>/dev/null)" ]; then

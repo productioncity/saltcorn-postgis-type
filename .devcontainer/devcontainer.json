@@ -6,6 +6,9 @@
 	"dockerComposeFile": "docker-compose.yaml",
 	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
 	"service": "app",
+	"mounts": [
+		"source=${localWorkspaceFolderBasename}-node_modules,target=${containerWorkspaceFolder}/node_modules,type=volume"
+	  ],
 	"features": {
 		"ghcr.io/devcontainers/features/common-utils:2": {
 			"installZsh": true,
@@ -50,7 +53,7 @@
 		}
 	},
 	// "initializeCommand": "touch ${localWorkspaceFolder}/.env",
-	"postCreateCommand": "echo \"export PATH=$PATH:/home/vscode/.local/bin\" >> ~/.zshrc && npm config set install-strategy nested && npm config set @productioncity:registry https://npm.pkg.github.com && npm config set //npm.pkg.github.com/:_authToken \"${GITHUB_TOKEN}\" && npm config set //registry.npmjs.org/:_authToken \"${NPM_AUTH_TOKEN}\" && npm i",
+	"postCreateCommand": "sudo chown -R vscode:vscode /workspaces/${localWorkspaceFolderBasename} && echo \"export PATH=$PATH:/home/vscode/.local/bin\" >> ~/.zshrc && npm config set install-strategy nested && npm config set @productioncity:registry https://npm.pkg.github.com && npm config set //npm.pkg.github.com/:_authToken \"${GITHUB_TOKEN}\" && npm config set //registry.npmjs.org/:_authToken \"${NPM_AUTH_TOKEN}\" && npm i",
 	"customizations": {
 		"vscode": {
 			"extensions": [
