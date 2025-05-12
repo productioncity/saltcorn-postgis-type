@@ -11,10 +11,6 @@ services:
     command: sleep infinity
     env_file:
       - ../.env
-
-  saltcorn:
-    image: ghcr.io/productioncity/saltcorn:edge
-    restart: unless-stopped
     environment:
       - TZ=${TZ:-Australia/Sydney}
       - PGHOST=postgres
@@ -26,39 +22,56 @@ services:
       - SALTCORN_SESSION_SECRET=0000000000000000001
       - SALTCORN_FILE_STORE=/filestore
       - SALTCORN_NWORKERS=1
-    volumes:
-      - type: tmpfs
-        target: "/tmp"
-        tmpfs:
-          size: 262144000
-          mode: 1777
-      - "/etc/timezone:/etc/timezone:ro"
-      - filestore:/filestore
-      - ../..:/workspaces:cached
     ports:
       - "3000:3000"
-    command:
-      - serve
-      - --verbose
-    healthcheck:
-      test:
-        - CMD
-        - python3
-        - -c
-        - |
-          import os, sys, http.client
-          port = int(os.getenv('APP_PORT', '3000'))
-          try:
-              conn = http.client.HTTPConnection('127.0.0.1', port, timeout=3)
-              conn.request('GET', '/')
-              ok = 200 <= conn.getresponse().status < 400
-              sys.exit(0 if ok else 1)
-          except Exception:
-              sys.exit(1)
-      interval: 30s # run every 30 s
-      timeout: 5s # fail if no response in 5 s
-      start_period: 300s # give Saltcorn a moment to boot
-      retries: 3 # marked unhealthy after 3 consecutive failures
+
+  # saltcorn:
+  #   image: ghcr.io/productioncity/saltcorn:edge
+  #   restart: unless-stopped
+  #   environment:
+  #     - TZ=${TZ:-Australia/Sydney}
+  #     - PGHOST=postgres
+  #     - PGPORT=5432
+  #     - PGDATABASE=saltcorn
+  #     - PGUSER=saltcorn
+  #     - PGPASSWORD=saltcorn
+  #     - SALTCORN_MULTI_TENANT=true
+  #     - SALTCORN_SESSION_SECRET=0000000000000000001
+  #     - SALTCORN_FILE_STORE=/filestore
+  #     - SALTCORN_NWORKERS=1
+  #   volumes:
+  #     - type: tmpfs
+  #       target: "/tmp"
+  #       tmpfs:
+  #         size: 262144000
+  #         mode: 1777
+  #     - "/etc/timezone:/etc/timezone:ro"
+  #     - filestore:/filestore
+  #     - ../..:/workspaces:cached
+  #   ports:
+  #     - "3000:3000"
+  #   command:
+  #     - serve
+  #     - --verbose
+  #   healthcheck:
+  #     test:
+  #       - CMD
+  #       - python3
+  #       - -c
+  #       - |
+  #         import os, sys, http.client
+  #         port = int(os.getenv('APP_PORT', '3000'))
+  #         try:
+  #             conn = http.client.HTTPConnection('127.0.0.1', port, timeout=3)
+  #             conn.request('GET', '/')
+  #             ok = 200 <= conn.getresponse().status < 400
+  #             sys.exit(0 if ok else 1)
+  #         except Exception:
+  #             sys.exit(1)
+  #     interval: 30s # run every 30 s
+  #     timeout: 5s # fail if no response in 5 s
+  #     start_period: 300s # give Saltcorn a moment to boot
+  #     retries: 3 # marked unhealthy after 3 consecutive failures
 
   postgres:
     image: postgis/postgis:${POSTGRES_MAJOR_VERSION:-17}-${POSTGRES_MINOR_VERSION:-3}.${POSTGRES_PATCH_VERSION:-5}
