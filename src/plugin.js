@@ -141,5 +141,5 @@ module.exports = {
   },
 
   /* Run-time dependency info for Saltcorn “Store” UI */
-  dependencies: ['wellknown', 'wkx'],
+  dependencies: ['wkx'],
 };

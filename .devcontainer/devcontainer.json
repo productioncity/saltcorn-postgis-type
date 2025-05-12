@@ -6,6 +6,9 @@
 	"dockerComposeFile": "docker-compose.yaml",
 	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
 	"service": "app",
+	// "mounts": [
+	// 	"source=${localWorkspaceFolderBasename}-node_modules,target=${containerWorkspaceFolder}/node_modules,type=volume"
+	//   ],
 	"features": {
 		"ghcr.io/devcontainers/features/common-utils:2": {
 			"installZsh": true,
@@ -49,8 +52,8 @@
 			"username": "vscode"
 		}
 	},
-	"initializeCommand": "touch ${localWorkspaceFolder}/.env",
-	"postCreateCommand": "sudo mkdir -p /home/vscode/.local/lib /home/vscode/.local/bin && sudo chown -R vscode /home/vscode/.local/lib /home/vscode/.local/bin && sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get -y full-upgrade && sudo DEBIAN_FRONTEND=noninteractive apt-get -y autoremove && sudo DEBIAN_FRONTEND=noninteractive apt-get -y autoclean && sudo DEBIAN_FRONTEND=noninteractive apt-get -y install vim zip unzip && python3 -m pip install --upgrade pip; pip install --user openai; npm install -g corepack; corepack enable; yes | corepack prepare yarn@stable --activate && yarn set version stable; yarn config set nodeLinker node-modules && yarn config set enableGlobalCache true && yarn config set enableImmutableInstalls true && yarn config set --json npmScopes '{\"productioncity\": {\"npmRegistryServer\": \"https://npm.pkg.github.com\", \"npmAlwaysAuth\": true}}' && yarn config set --json npmRegistries \"{\\\"//registry.npmjs.org\\\": {\\\"npmAuthToken\\\": \\\"${NPM_AUTH_TOKEN}\\\"}, \\\"//npm.pkg.github.com\\\": {\\\"npmAuthToken\\\": \\\"${GITHUB_TOKEN}\\\"}}\" && yarn config set --json packageExtensions \"{\\\"@sentry/node@*\\\":{\\\"peerDependencies\\\":{\\\"@prisma/instrumentation\\\":\\\"*\\\"}},\\\"@sentry/opentelemetry@*\\\":{\\\"peerDependencies\\\":{\\\"require-in-the-middle\\\":\\\"*\\\"}}}\" && yarn install --immutable || (yarn install --mode=update-lockfile && yarn install --immutable)",
+	// "initializeCommand": "touch ${localWorkspaceFolder}/.env",
+	"postCreateCommand": "sudo chown -R vscode:vscode /workspaces/${localWorkspaceFolderBasename} && echo \"export PATH=$PATH:/home/vscode/.local/bin\" >> ~/.zshrc && npm config set @productioncity:registry https://npm.pkg.github.com && npm config set //npm.pkg.github.com/:_authToken \"${GITHUB_TOKEN}\" && npm config set //registry.npmjs.org/:_authToken \"${NPM_AUTH_TOKEN}\" && npm config set install-strategy nested && npm config set fund false && npm config set audit false && npm install --global --install-strategy=nested --omit=dev \"@saltcorn/cli@1.1.4\" && npm i",
 	"customizations": {
 		"vscode": {
 			"extensions": [
@@ -68,7 +71,7 @@
 				"ZainChen.json",
 				"redhat.vscode-yaml",
 				"dbaeumer.vscode-eslint",
-				"ms-azuretools.vscode-docker"
+				"ms-azuretools.vscode-containers"
 			]
 		}
 	}

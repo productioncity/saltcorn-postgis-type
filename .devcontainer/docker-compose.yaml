@@ -11,10 +11,6 @@ services:
     command: sleep infinity
     env_file:
       - ../.env
-
-  saltcorn:
-    image: saltcorn/saltcorn:latest
-    restart: unless-stopped
     environment:
       - TZ=${TZ:-Australia/Sydney}
       - PGHOST=postgres
@@ -26,41 +22,56 @@ services:
       - SALTCORN_SESSION_SECRET=0000000000000000001
       - SALTCORN_FILE_STORE=/filestore
       - SALTCORN_NWORKERS=1
-    volumes:
-      - type: tmpfs
-        target: "/tmp"
-        tmpfs:
-          size: 262144000
-          mode: 1777
-      - "/etc/timezone:/etc/timezone:ro"
-      - filestore:/filestore
-      - ../..:/workspaces:cached
     ports:
       - "3000:3000"
-    command: "serve"
-    entrypoint:
-      - /bin/sh
-      - -euc
-      - 'PG_WAIT_TIMEOUT=$${PG_WAIT_TIMEOUT:-60}; PG_WAIT_INTERVAL=$${PG_WAIT_INTERVAL:-2}; start=$$(date +%s); until pg_isready -h "$$PGHOST" -p "$$PGPORT" -U "$$PGUSER" >/dev/null 2>&1; do if [ $$(( $$(date +%s) - start )) -ge "$$PG_WAIT_TIMEOUT" ]; then echo "Postgres still unreachable after $${PG_WAIT_TIMEOUT}s — exiting."; exit 1; fi; echo "Waiting for Postgres at $${PGHOST}:$${PGPORT}…"; sleep "$$PG_WAIT_INTERVAL"; done; set -- "$$0" "$$@"; exec /usr/local/bin/saltcorn "$$@"'
-    healthcheck:
-      test:
-        - CMD
-        - python3
-        - -c
-        - |
-          import os, sys, http.client
-          port = int(os.getenv('APP_PORT', '3000'))
-          try:
-              conn = http.client.HTTPConnection('127.0.0.1', port, timeout=3)
-              conn.request('GET', '/')
-              ok = 200 <= conn.getresponse().status < 400
-              sys.exit(0 if ok else 1)
-          except Exception:
-              sys.exit(1)
-      interval: 30s # run every 30 s
-      timeout: 5s # fail if no response in 5 s
-      start_period: 300s # give Saltcorn a moment to boot
-      retries: 3 # marked unhealthy after 3 consecutive failures
+
+  # saltcorn:
+  #   image: ghcr.io/productioncity/saltcorn:edge
+  #   restart: unless-stopped
+  #   environment:
+  #     - TZ=${TZ:-Australia/Sydney}
+  #     - PGHOST=postgres
+  #     - PGPORT=5432
+  #     - PGDATABASE=saltcorn
+  #     - PGUSER=saltcorn
+  #     - PGPASSWORD=saltcorn
+  #     - SALTCORN_MULTI_TENANT=true
+  #     - SALTCORN_SESSION_SECRET=0000000000000000001
+  #     - SALTCORN_FILE_STORE=/filestore
+  #     - SALTCORN_NWORKERS=1
+  #   volumes:
+  #     - type: tmpfs
+  #       target: "/tmp"
+  #       tmpfs:
+  #         size: 262144000
+  #         mode: 1777
+  #     - "/etc/timezone:/etc/timezone:ro"
+  #     - filestore:/filestore
+  #     - ../..:/workspaces:cached
+  #   ports:
+  #     - "3000:3000"
+  #   command:
+  #     - serve
+  #     - --verbose
+  #   healthcheck:
+  #     test:
+  #       - CMD
+  #       - python3
+  #       - -c
+  #       - |
+  #         import os, sys, http.client
+  #         port = int(os.getenv('APP_PORT', '3000'))
+  #         try:
+  #             conn = http.client.HTTPConnection('127.0.0.1', port, timeout=3)
+  #             conn.request('GET', '/')
+  #             ok = 200 <= conn.getresponse().status < 400
+  #             sys.exit(0 if ok else 1)
+  #         except Exception:
+  #             sys.exit(1)
+  #     interval: 30s # run every 30 s
+  #     timeout: 5s # fail if no response in 5 s
+  #     start_period: 300s # give Saltcorn a moment to boot
+  #     retries: 3 # marked unhealthy after 3 consecutive failures
 
   postgres:
     image: postgis/postgis:${POSTGRES_MAJOR_VERSION:-17}-${POSTGRES_MINOR_VERSION:-3}.${POSTGRES_PATCH_VERSION:-5}
@@ -82,7 +93,7 @@ services:
         apt-get update &&
         DEBIAN_FRONTEND=noninteractive apt-get install -y apt-transport-https lsb-release curl postgresql-plpython3-$$PG_MAJOR python3-requests postgresql-$$PG_MAJOR-cron &&
         echo "deb https://packagecloud.io/timescale/timescaledb/debian/ $$(lsb_release -c -s) main" | tee /etc/apt/sources.list.d/timescaledb.list &&
-        curl -L https://packagecloud.io/timescale/timescaledb/gpgkey | gpg --dearmor -o /etc/apt/trusted.gpg.d/timescaledb.gpg &&
+        curl -L https://packagecloud.io/timescale/timescaledb/gpgkey | gpg --dearmor --batch --yes --no-tty -o /etc/apt/trusted.gpg.d/timescaledb.gpg &&
         apt-get update &&
         DEBIAN_FRONTEND=noninteractive apt-get install -y timescaledb-2-postgresql-$$PG_MAJOR timescaledb-toolkit-postgresql-$$PG_MAJOR &&
         if [ ! -d "$$PGDATA" ] || [ -z "$$(ls -A "$$PGDATA" 2>/dev/null)" ]; then
