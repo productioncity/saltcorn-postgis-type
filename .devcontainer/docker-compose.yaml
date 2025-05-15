@@ -63,7 +63,7 @@ services:
       retries: 3 # marked unhealthy after 3 consecutive failures
 
   postgres:
-    image: postgis/postgis:${POSTGRES_MAJOR_VERSION:-17}-${POSTGRES_MINOR_VERSION:-3}.${POSTGRES_PATCH_VERSION:-5}
+    image: ghcr.io/baosystems/postgis:${POSTGRES_MAJOR_VERSION:-17}-${POSTGRES_MINOR_VERSION:-3}.${POSTGRES_PATCH_VERSION:-5}
     stop_grace_period: 600s
     environment:
       - POSTGRES_DB=saltcorn
